@@ -12,7 +12,8 @@ use smithay::{
         },
         egl::{EGLContext, EGLDisplay},
         input::{
-            AbsolutePositionEvent, Event, InputEvent, KeyboardKeyEvent, PointerButtonEvent,
+            AbsolutePositionEvent, Axis, Event, InputEvent, KeyboardKeyEvent,
+            PointerAxisEvent, PointerButtonEvent,
             PointerMotionEvent as PointerMotionEventTrait,
         },
         libinput::{LibinputInputBackend, LibinputSessionInterface},
@@ -29,7 +30,7 @@ use smithay::{
         session::{libseat::LibSeatSession, Event as SessionEvent, Session},
         udev::{self, UdevBackend},
     },
-    desktop::{space::Space, space::space_render_elements, space::SpaceRenderElements, Window, WindowSurfaceType},
+    desktop::{PopupManager, PopupKind, PopupKeyboardGrab, PopupPointerGrab, space::Space, space::space_render_elements, space::SpaceRenderElements, Window, WindowSurfaceType},
     input::{
         keyboard::{FilterResult, XkbConfig},
         pointer::{
@@ -185,6 +186,7 @@ pub struct AgentCompositor {
     pub taskbar_bg: MemoryRenderBuffer,
     pub taskbar_buttons: Vec<(String, bool, bool, MemoryRenderBuffer)>,
 
+    pub popup_manager: PopupManager,
     pub minimized_windows: Vec<(Window, Point<i32, Logical>)>,
 
     pub wayland_display: String,
@@ -222,6 +224,7 @@ impl CompositorHandler for AgentCompositor {
 
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
+        self.popup_manager.commit(surface);
 
         if !is_sync_subsurface(surface) {
             let mut root = surface.clone();
@@ -378,8 +381,26 @@ impl XdgShellHandler for AgentCompositor {
         }
     }
 
-    fn new_popup(&mut self, _surface: PopupSurface, _positioner: PositionerState) {}
-    fn grab(&mut self, _surface: PopupSurface, _seat: WlSeat, _serial: Serial) {}
+    fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {
+        let _ = surface.send_configure();
+        let _ = self.popup_manager.track_popup(PopupKind::Xdg(surface));
+    }
+    fn grab(&mut self, surface: PopupSurface, _seat: WlSeat, serial: Serial) {
+        let seat = self.seat.clone();
+        let kind = PopupKind::Xdg(surface);
+        let mut root = kind.wl_surface().clone();
+        while let Some(parent) = compositor::get_parent(&root) {
+            root = parent;
+        }
+        if let Ok(grab) = self.popup_manager.grab_popup::<AgentCompositor>(root, kind, &seat, serial) {
+            let keyboard = seat.get_keyboard().unwrap();
+            let pointer = seat.get_pointer().unwrap();
+            let kb_grab = PopupKeyboardGrab::new(&grab);
+            let ptr_grab = PopupPointerGrab::new(&grab);
+            keyboard.set_grab(self, kb_grab, serial);
+            pointer.set_grab(self, ptr_grab, serial, Focus::Keep);
+        }
+    }
     fn reposition_request(
         &mut self,
         _surface: PopupSurface,
@@ -1020,6 +1041,7 @@ pub fn run() -> Result<()> {
         redraw_state: RedrawState::Idle,
         taskbar_bg,
         taskbar_buttons: Vec::new(),
+        popup_manager: PopupManager::default(),
         minimized_windows: Vec::new(),
         wayland_display: socket_name.clone(),
         mcp_tx,
@@ -1971,8 +1993,10 @@ fn handle_input(state: &mut AgentCompositor, event: InputEvent<LibinputInputBack
         InputEvent::PointerButton { event, .. } => {
             let serial = SERIAL_COUNTER.next_serial();
             let pointer = state.pointer.clone();
+            let button_code = event.button_code();
+            let is_left = button_code == 0x110; // BTN_LEFT
 
-            if event.state() == smithay::backend::input::ButtonState::Pressed {
+            if is_left && event.state() == smithay::backend::input::ButtonState::Pressed {
                 let location = pointer.current_location();
                 let output_h = state.output.current_mode().map(|m| m.size.h).unwrap_or(1080) as f64;
                 let taskbar_y = output_h - TASKBAR_HEIGHT as f64;
@@ -2008,8 +2032,8 @@ fn handle_input(state: &mut AgentCompositor, event: InputEvent<LibinputInputBack
                             unminimize_window(state, min_idx);
                         }
                     }
+                    return;
                 } else if let Some((window, edges)) = detect_resize_edge(state, location) {
-                    // Edge resize
                     let initial_loc = state.space.element_location(&window).unwrap_or_default();
                     let initial_size = window
                         .toplevel()
@@ -2018,7 +2042,7 @@ fn handle_input(state: &mut AgentCompositor, event: InputEvent<LibinputInputBack
                     let pointer = state.pointer.clone();
                     let start_data = GrabStartData {
                         focus: None,
-                        button: event.button_code(),
+                        button: button_code,
                         location,
                     };
                     let grab = ResizeSurfaceGrab {
@@ -2029,44 +2053,37 @@ fn handle_input(state: &mut AgentCompositor, event: InputEvent<LibinputInputBack
                         initial_loc,
                     };
                     pointer.set_grab(state, grab, serial, Focus::Clear);
-                } else {
-                    // Normal click-to-focus
-                    let window = state
-                        .space
-                        .element_under(location)
-                        .map(|(w, _)| w.clone());
-                    if let Some(window) = &window {
-                        state.space.raise_element(window, true);
-                        if let Some(keyboard) = state.seat.get_keyboard() {
-                            let surface =
-                                window.toplevel().map(|t| t.wl_surface().clone());
-                            keyboard.set_focus(state, surface, serial);
-                        }
-                    } else if let Some(keyboard) = state.seat.get_keyboard() {
-                        keyboard.set_focus(state, None, serial);
-                    }
-
-                    pointer.button(
-                        state,
-                        &ButtonEvent {
-                            serial,
-                            time: event.time_msec(),
-                            button: event.button_code(),
-                            state: event.state(),
-                        },
-                    );
+                    return;
                 }
-            } else {
-                pointer.button(
-                    state,
-                    &ButtonEvent {
-                        serial,
-                        time: event.time_msec(),
-                        button: event.button_code(),
-                        state: event.state(),
-                    },
-                );
             }
+
+            if event.state() == smithay::backend::input::ButtonState::Pressed {
+                let location = pointer.current_location();
+                let window = state
+                    .space
+                    .element_under(location)
+                    .map(|(w, _)| w.clone());
+                if let Some(window) = &window {
+                    state.space.raise_element(window, true);
+                    if let Some(keyboard) = state.seat.get_keyboard() {
+                        let surface =
+                            window.toplevel().map(|t| t.wl_surface().clone());
+                        keyboard.set_focus(state, surface, serial);
+                    }
+                } else if let Some(keyboard) = state.seat.get_keyboard() {
+                    keyboard.set_focus(state, None, serial);
+                }
+            }
+
+            pointer.button(
+                state,
+                &ButtonEvent {
+                    serial,
+                    time: event.time_msec(),
+                    button: button_code,
+                    state: event.state(),
+                },
+            );
         }
         InputEvent::PointerMotion { event, .. } => {
             let pointer = state.pointer.clone();
@@ -2109,6 +2126,25 @@ fn handle_input(state: &mut AgentCompositor, event: InputEvent<LibinputInputBack
                 }
                 queue_redraw(state);
             }
+        }
+        InputEvent::PointerAxis { event, .. } => {
+            let pointer = state.pointer.clone();
+            let source = event.source();
+            let mut frame = AxisFrame::new(event.time_msec()).source(source);
+            for axis in [Axis::Vertical, Axis::Horizontal] {
+                let v120 = event.amount_v120(axis);
+                let amount = event.amount(axis).or_else(|| {
+                    v120.map(|v| v / 120.0 * 15.0)
+                });
+                if let Some(val) = amount {
+                    frame = frame.value(axis, val);
+                }
+                if let Some(discrete) = v120 {
+                    frame = frame.v120(axis, discrete as i32);
+                }
+            }
+            pointer.axis(state, frame);
+            pointer.frame(state);
         }
         _ => {}
     }

@@ -171,13 +171,23 @@ define_class!(
         }
 
         #[unsafe(method(mouseDown:))]
-        fn mouseDown(&self, _event: &NSEvent) {
-            crate::input::send_mouse_button(crate::input::macos_mouse_button_to_linux(0), true);
+        fn mouseDown(&self, event: &NSEvent) {
+            let btn = if event.modifierFlags().contains(objc2_app_kit::NSEventModifierFlags::Control) {
+                crate::input::macos_mouse_button_to_linux(1)
+            } else {
+                crate::input::macos_mouse_button_to_linux(0)
+            };
+            crate::input::send_mouse_button(btn, true);
         }
 
         #[unsafe(method(mouseUp:))]
-        fn mouseUp(&self, _event: &NSEvent) {
-            crate::input::send_mouse_button(crate::input::macos_mouse_button_to_linux(0), false);
+        fn mouseUp(&self, event: &NSEvent) {
+            let btn = if event.modifierFlags().contains(objc2_app_kit::NSEventModifierFlags::Control) {
+                crate::input::macos_mouse_button_to_linux(1)
+            } else {
+                crate::input::macos_mouse_button_to_linux(0)
+            };
+            crate::input::send_mouse_button(btn, false);
         }
 
         #[unsafe(method(rightMouseDown:))]
@@ -217,10 +227,17 @@ define_class!(
             self.send_abs_position(event);
         }
 
+        #[unsafe(method(otherMouseDragged:))]
+        fn otherMouseDragged(&self, event: &NSEvent) {
+            self.send_abs_position(event);
+        }
+
         #[unsafe(method(scrollWheel:))]
         fn scrollWheel(&self, event: &NSEvent) {
-            let dy = event.scrollingDeltaY() as i32;
-            let dx = event.scrollingDeltaX() as i32;
+            let raw_dy = -event.scrollingDeltaY();
+            let raw_dx = -event.scrollingDeltaX();
+            let dy = if raw_dy > 0.0 { raw_dy.ceil() as i32 } else if raw_dy < 0.0 { raw_dy.floor() as i32 } else { 0 };
+            let dx = if raw_dx > 0.0 { raw_dx.ceil() as i32 } else if raw_dx < 0.0 { raw_dx.floor() as i32 } else { 0 };
             if dx != 0 || dy != 0 { crate::input::send_mouse_scroll(dx, dy); }
         }
     }

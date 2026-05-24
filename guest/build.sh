@@ -60,7 +60,8 @@ apk add --root /rootfs --initdb --no-cache \
     seatd-openrc \
     libseat \
     libinput \
-    ttf-dejavu \
+    font-noto \
+    font-noto-cjk \
     adwaita-icon-theme \
     xwayland \
     wlr-randr \
@@ -338,14 +339,22 @@ rm -rf "$INITRAMFS_DIR"
 rm -f /rootfs/boot/vmlinuz-* /rootfs/boot/initramfs-*
 
 echo "--- Creating disk image (${DISK_SIZE_MB}MB) ---"
-truncate -s "${DISK_SIZE_MB}M" /output/disk.img
-mke2fs -t ext4 -d /rootfs -L agentos -F /output/disk.img
+truncate -s "${DISK_SIZE_MB}M" /tmp/disk.img
+mke2fs -t ext4 -L agentos -F /tmp/disk.img
+MOUNT_DIR=$(mktemp -d)
+mount -o loop /tmp/disk.img "$MOUNT_DIR"
+cp -a /rootfs/* "$MOUNT_DIR/"
+sync
+umount "$MOUNT_DIR"
+rmdir "$MOUNT_DIR"
+cp /tmp/disk.img /output/disk.img
+rm /tmp/disk.img
 
 echo "--- Done ---"
 ls -lh /output/
 BUILDSCRIPT
 
-docker run --rm \
+docker run --rm --privileged \
     --platform "$DOCKER_PLATFORM" \
     -v "$SCRIPT_DIR/rootfs:/overlay:ro" \
     -v "$OUT_DIR:/output" \

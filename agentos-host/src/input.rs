@@ -523,7 +523,7 @@ unsafe extern "C" fn mouse_query_event_capabilities(
                 write_bitmap(bitmap, bitmap_len, REL_WHEEL);
                 write_bitmap(bitmap, bitmap_len, REL_HWHEEL);
             }
-            REL_HWHEEL
+            REL_WHEEL
         }
         _ => return 0,
     };
