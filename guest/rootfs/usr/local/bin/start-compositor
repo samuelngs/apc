@@ -27,7 +27,7 @@ export HOME=/home/agentos
 
 if [ -x /usr/local/bin/agentos-compositor ]; then
     echo "start-compositor: launching agentos-compositor" > /dev/kmsg 2>/dev/null
-    exec su -l agentos -c "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR WLR_BACKENDS=drm WLR_RENDERER=gles2 LIBSEAT_BACKEND=noop /usr/local/bin/agentos-compositor 2>&1"
+    exec su -l agentos -c "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR WLR_BACKENDS=drm WLR_RENDERER=gles2 LIBSEAT_BACKEND=noop XCURSOR_THEME=Adwaita XCURSOR_SIZE=24 /usr/local/bin/agentos-compositor 2>&1"
 else
     echo "start-compositor: agentos-compositor not found" > /dev/kmsg 2>/dev/null
     exit 1

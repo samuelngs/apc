@@ -61,6 +61,7 @@ apk add --root /rootfs --initdb --no-cache \
     libseat \
     libinput \
     ttf-dejavu \
+    adwaita-icon-theme \
     xwayland \
     wlr-randr \
     foot \

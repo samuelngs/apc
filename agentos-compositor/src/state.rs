@@ -174,11 +174,11 @@ pub struct AgentCompositor {
     pub drm_compositor: GbmDrmCompositor,
     pub drm_device: DrmDevice,
 
-    pub cursor_default: MemoryRenderBuffer,
-    pub cursor_resize_nwse: MemoryRenderBuffer,
-    pub cursor_resize_nesw: MemoryRenderBuffer,
-    pub cursor_resize_ns: MemoryRenderBuffer,
-    pub cursor_resize_ew: MemoryRenderBuffer,
+    pub cursor_default: crate::cursor::LoadedCursor,
+    pub cursor_resize_nwse: crate::cursor::LoadedCursor,
+    pub cursor_resize_nesw: crate::cursor::LoadedCursor,
+    pub cursor_resize_ns: crate::cursor::LoadedCursor,
+    pub cursor_resize_ew: crate::cursor::LoadedCursor,
     pub cursor_shape: CursorShape,
     pub redraw_state: RedrawState,
 
@@ -745,60 +745,6 @@ impl PointerGrab<AgentCompositor> for ResizeSurfaceGrab {
 }
 
 
-#[cfg(target_os = "linux")]
-fn create_cursor_buffer() -> MemoryRenderBuffer {
-    #[rustfmt::skip]
-    let arrow: [[u8; 16]; 16] = [
-        [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-        [1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-        [1,2,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
-        [1,2,2,1,0,0,0,0,0,0,0,0,0,0,0,0],
-        [1,2,2,2,1,0,0,0,0,0,0,0,0,0,0,0],
-        [1,2,2,2,2,1,0,0,0,0,0,0,0,0,0,0],
-        [1,2,2,2,2,2,1,0,0,0,0,0,0,0,0,0],
-        [1,2,2,2,2,2,2,1,0,0,0,0,0,0,0,0],
-        [1,2,2,2,2,2,2,2,1,0,0,0,0,0,0,0],
-        [1,2,2,2,2,2,1,1,1,1,0,0,0,0,0,0],
-        [1,2,2,2,2,2,1,0,0,0,0,0,0,0,0,0],
-        [1,2,2,1,1,2,2,1,0,0,0,0,0,0,0,0],
-        [1,2,1,0,0,1,2,1,0,0,0,0,0,0,0,0],
-        [1,1,0,0,0,1,2,2,1,0,0,0,0,0,0,0],
-        [1,0,0,0,0,0,1,2,1,0,0,0,0,0,0,0],
-        [0,0,0,0,0,0,1,1,1,0,0,0,0,0,0,0],
-    ];
-    let mut data = vec![0u8; 16 * 16 * 4];
-    for y in 0..16 {
-        for x in 0..16 {
-            let i = (y * 16 + x) * 4;
-            match arrow[y][x] {
-                1 => { data[i] = 0; data[i + 1] = 0; data[i + 2] = 0; data[i + 3] = 255; }
-                2 => { data[i] = 255; data[i + 1] = 255; data[i + 2] = 255; data[i + 3] = 255; }
-                _ => {}
-            }
-        }
-    }
-    MemoryRenderBuffer::from_slice(
-        &data,
-        DrmFourcc::Abgr8888,
-        (16, 16),
-        1,
-        Transform::Normal,
-        None,
-    )
-}
-
-#[cfg(target_os = "linux")]
-fn create_cursor_from_bitmap(bitmap: &[[u8; 16]; 16]) -> MemoryRenderBuffer {
-    let data = crate::bitmap::bitmap_to_cursor_data(bitmap);
-    MemoryRenderBuffer::from_slice(
-        &data,
-        DrmFourcc::Abgr8888,
-        (16, 16),
-        1,
-        Transform::Normal,
-        None,
-    )
-}
 
 #[cfg(target_os = "linux")]
 fn create_solid_buffer(w: i32, h: i32, r: u8, g: u8, b: u8, a: u8) -> MemoryRenderBuffer {
@@ -1037,11 +983,12 @@ pub fn run() -> Result<()> {
     let mut space = Space::default();
     space.map_output(&output, (0, 0));
 
-    let cursor_default = create_cursor_buffer();
-    let cursor_resize_nwse = create_cursor_from_bitmap(&crate::bitmap::resize_nwse_bitmap());
-    let cursor_resize_nesw = create_cursor_from_bitmap(&crate::bitmap::resize_nesw_bitmap());
-    let cursor_resize_ns = create_cursor_from_bitmap(&crate::bitmap::resize_ns_bitmap());
-    let cursor_resize_ew = create_cursor_from_bitmap(&crate::bitmap::resize_ew_bitmap());
+    let cursor_theme = crate::cursor::CursorTheme::load();
+    let cursor_default = cursor_theme.load_cursor("left_ptr");
+    let cursor_resize_nwse = cursor_theme.load_cursor("top_left_corner");
+    let cursor_resize_nesw = cursor_theme.load_cursor("top_right_corner");
+    let cursor_resize_ns = cursor_theme.load_cursor("sb_v_double_arrow");
+    let cursor_resize_ew = cursor_theme.load_cursor("sb_h_double_arrow");
     let output_w = mode_size.0 as i32;
     let taskbar_bg = create_solid_buffer(output_w, TASKBAR_HEIGHT, 30, 30, 30, 255);
 
@@ -1216,17 +1163,21 @@ fn render_frame(state: &mut AgentCompositor) {
     // Element order is front-to-back: first = topmost
     let mut elements: Vec<OutputRenderElements<GlesRenderer, _>> = Vec::new();
 
-    let cursor_buf = match state.cursor_shape {
+    let cursor = match state.cursor_shape {
         CursorShape::Default => &state.cursor_default,
         CursorShape::ResizeNWSE => &state.cursor_resize_nwse,
         CursorShape::ResizeNESW => &state.cursor_resize_nesw,
         CursorShape::ResizeNS => &state.cursor_resize_ns,
         CursorShape::ResizeEW => &state.cursor_resize_ew,
     };
+    let cursor_pos = (
+        pointer_loc.x - cursor.hotspot.0 as f64,
+        pointer_loc.y - cursor.hotspot.1 as f64,
+    );
     if let Ok(cursor_elem) = MemoryRenderBufferRenderElement::from_buffer(
         &mut state.renderer,
-        (pointer_loc.x, pointer_loc.y),
-        cursor_buf,
+        cursor_pos,
+        &cursor.buffer,
         None,
         None,
         None,
@@ -1825,10 +1776,14 @@ fn capture_screen(state: &mut AgentCompositor) -> Result<(u32, u32, String)> {
     let pointer_loc = state.pointer.current_location();
     let mut elements: Vec<OutputRenderElements<GlesRenderer, _>> = Vec::new();
 
+    let cursor_pos = (
+        pointer_loc.x - state.cursor_default.hotspot.0 as f64,
+        pointer_loc.y - state.cursor_default.hotspot.1 as f64,
+    );
     if let Ok(cursor_elem) = MemoryRenderBufferRenderElement::from_buffer(
         &mut state.renderer,
-        (pointer_loc.x, pointer_loc.y),
-        &state.cursor_default,
+        cursor_pos,
+        &state.cursor_default.buffer,
         None,
         None,
         None,

@@ -1,4 +1,5 @@
 mod bitmap;
+mod cursor;
 mod mcp;
 mod state;
 
