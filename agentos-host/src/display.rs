@@ -156,6 +156,14 @@ impl DisplayState {
         }
     }
 
+    pub fn vm_width(&self) -> u32 {
+        self.width.load(Ordering::Relaxed)
+    }
+
+    pub fn vm_height(&self) -> u32 {
+        self.height.load(Ordering::Relaxed)
+    }
+
     pub fn get_front_surface(&self) -> Option<IOSurfaceRef> {
         let seq = self.frame_seq.load(Ordering::Acquire);
         let seen = self.last_seen.load(Ordering::Relaxed);

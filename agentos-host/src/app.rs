@@ -232,12 +232,29 @@ impl FramebufferView {
         let loc = event.locationInWindow();
         let local = self.convertPoint_fromView(loc, None);
         let bounds = self.bounds();
-        if bounds.size.width <= 0.0 || bounds.size.height <= 0.0 {
+        let vw = bounds.size.width;
+        let vh = bounds.size.height;
+        if vw <= 0.0 || vh <= 0.0 {
             return;
         }
-        let nx = (local.x / bounds.size.width).clamp(0.0, 1.0);
+
+        let ds = display::global_display();
+        let vm_w = ds.vm_width() as f64;
+        let vm_h = ds.vm_height() as f64;
+        if vm_w <= 0.0 || vm_h <= 0.0 {
+            return;
+        }
+
+        // Contain: VM framebuffer scaled to fit within view, letterboxed.
+        let scale = (vw / vm_w).min(vh / vm_h);
+        let rendered_w = vm_w * scale;
+        let rendered_h = vm_h * scale;
+        let pad_x = (vw - rendered_w) / 2.0;
+        let pad_y = (vh - rendered_h) / 2.0;
+
+        let nx = ((local.x - pad_x) / rendered_w).clamp(0.0, 1.0);
         // NSView Y is bottom-up, flip to top-down
-        let ny = (1.0 - local.y / bounds.size.height).clamp(0.0, 1.0);
+        let ny = (1.0 - (local.y - pad_y) / rendered_h).clamp(0.0, 1.0);
         let abs_x = (nx * 32767.0) as u32;
         let abs_y = (ny * 32767.0) as u32;
         crate::input::send_mouse_move_abs(abs_x, abs_y);
@@ -250,7 +267,7 @@ impl FramebufferView {
         view.setWantsLayer(true);
         if let Some(layer) = view.layer() {
             layer.setContentsScale(1.0);
-            layer.setContentsGravity(unsafe { objc2_quartz_core::kCAGravityResize });
+            layer.setContentsGravity(unsafe { objc2_quartz_core::kCAGravityResizeAspect });
             layer.setOpaque(true);
         }
         unsafe {
