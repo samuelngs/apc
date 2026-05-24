@@ -1,5 +1,3 @@
-//! Virtual keyboard and mouse input devices for libkrun.
-
 #![allow(dead_code)]
 
 #[cfg(target_os = "macos")]
@@ -289,7 +287,6 @@ const SUPPORTED_KEYBOARD_KEYS: &[u16] = &[
     119,
     // KEY_LEFTMETA(125) — Command key
     125,
-    // KEY_F13(183)..KEY_F16 — actually using codes from mapping: 210, 70, 110
     210,
 ];
 
@@ -305,7 +302,6 @@ unsafe extern "C" fn kbd_config_create(
     _userdata: *const c_void,
     _reserved: *const c_void,
 ) -> i32 {
-    // We use global state — no per-instance data needed
     unsafe { *instance = std::ptr::null_mut() };
     0
 }
@@ -663,7 +659,6 @@ pub fn create_mouse_backend() -> (KrunInputConfig, KrunInputEventProvider) {
 }
 
 
-// value: 0 = release, 1 = press, 2 = repeat
 #[cfg(target_os = "macos")]
 pub fn send_key_event(code: u16, value: u32) {
     keyboard_queue().push_batch(&[
@@ -680,7 +675,6 @@ pub fn send_key_event(code: u16, value: u32) {
     ]);
 }
 
-// x, y in range 0..=32767
 #[cfg(target_os = "macos")]
 pub fn send_mouse_move_abs(x: u32, y: u32) {
     mouse_queue().push_batch(&[

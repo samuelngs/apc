@@ -1,7 +1,12 @@
 mod bitmap;
 mod cursor;
+mod grabs;
+mod input;
 mod mcp;
+mod mcp_dispatch;
+mod render;
 mod state;
+mod taskbar;
 
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();

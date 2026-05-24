@@ -3,7 +3,7 @@ use std::ffi::c_void;
 #[cfg(target_os = "macos")]
 use std::ptr;
 #[cfg(target_os = "macos")]
-use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 #[cfg(target_os = "macos")]
 use std::sync::{Arc, Mutex};
 
@@ -29,7 +29,6 @@ unsafe extern "C" {
     fn IOSurfaceUnlock(surface: IOSurfaceRef, options: u32, seed: *mut u32) -> i32;
     fn IOSurfaceGetAllocSize(surface: IOSurfaceRef) -> usize;
     fn CFRelease(obj: *const c_void);
-    fn CFRetain(obj: *const c_void) -> *const c_void;
 
     static kIOSurfaceWidth: CFStringRef;
     static kIOSurfaceHeight: CFStringRef;
@@ -126,8 +125,6 @@ struct SurfacePool {
     surfaces: [IOSurfaceRef; NUM_SURFACES],
     write_idx: usize,
     ready_idx: Option<usize>,
-    // CA may hold the current surface AND the previous one during composite.
-    // Both must be excluded from GPU write selection.
     display_idx: Option<usize>,
     prev_display_idx: Option<usize>,
 }

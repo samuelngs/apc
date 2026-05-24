@@ -42,7 +42,7 @@ pub fn start(
     loop_handle
         .insert_source(cmd_rx, |event, _, data| {
             if let channel::Event::Msg(cmd) = event {
-                let result = super::state::handle_mcp_tool(&mut data.state, &mut data.display, cmd.tool);
+                let result = super::mcp_dispatch::handle_mcp_tool(&mut data.state, &mut data.display, cmd.tool);
                 let _ = cmd.reply.send(result);
             }
         })

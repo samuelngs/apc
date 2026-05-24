@@ -51,12 +51,6 @@ fn ca_transaction_commit() {
 
 #[cfg(target_os = "macos")]
 unsafe extern "C" {
-    fn dispatch_async_f(
-        queue: *mut std::ffi::c_void,
-        context: *mut std::ffi::c_void,
-        work: unsafe extern "C" fn(*mut std::ffi::c_void),
-    );
-
     fn dispatch_source_create(
         source_type: *const std::ffi::c_void,
         handle: usize,
@@ -262,7 +256,6 @@ impl FramebufferView {
             return;
         }
 
-        // Contain: VM framebuffer scaled to fit within view, letterboxed.
         let scale = (vw / vm_w).min(vh / vm_h);
         let rendered_w = vm_w * scale;
         let rendered_h = vm_h * scale;
@@ -270,7 +263,6 @@ impl FramebufferView {
         let pad_y = (vh - rendered_h) / 2.0;
 
         let nx = ((local.x - pad_x) / rendered_w).clamp(0.0, 1.0);
-        // NSView Y is bottom-up, flip to top-down
         let ny = (1.0 - (local.y - pad_y) / rendered_h).clamp(0.0, 1.0);
         let abs_x = (nx * 32767.0) as u32;
         let abs_y = (ny * 32767.0) as u32;
