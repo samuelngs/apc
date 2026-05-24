@@ -1,0 +1,34 @@
+#!/bin/sh
+echo "start-compositor: script started" > /dev/kmsg 2>/dev/null
+
+for i in $(seq 1 30); do
+    [ -e /dev/dri/card0 ] && break
+    sleep 0.5
+done
+
+if [ ! -e /dev/dri/card0 ]; then
+    echo "start-compositor: no DRM device found" > /dev/kmsg 2>/dev/null
+    sleep 10
+    exit 1
+fi
+
+echo "start-compositor: found card0, setting up env" > /dev/kmsg 2>/dev/null
+
+AGENTOS_UID=$(id -u agentos 2>/dev/null || echo 1000)
+export XDG_RUNTIME_DIR=/run/user/$AGENTOS_UID
+mkdir -p "$XDG_RUNTIME_DIR"
+chown agentos:agentos "$XDG_RUNTIME_DIR"
+chmod 0700 "$XDG_RUNTIME_DIR"
+
+export WLR_BACKENDS=drm
+export WLR_RENDERER=gles2
+export LIBSEAT_BACKEND=noop
+export HOME=/home/agentos
+
+if [ -x /usr/local/bin/agentos-compositor ]; then
+    echo "start-compositor: launching agentos-compositor" > /dev/kmsg 2>/dev/null
+    exec su -l agentos -c "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR WLR_BACKENDS=drm WLR_RENDERER=gles2 LIBSEAT_BACKEND=noop /usr/local/bin/agentos-compositor 2>&1"
+else
+    echo "start-compositor: agentos-compositor not found" > /dev/kmsg 2>/dev/null
+    exit 1
+fi

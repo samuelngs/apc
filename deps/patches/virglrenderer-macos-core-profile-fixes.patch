@@ -1,0 +1,15 @@
+--- a/src/vrend/vrend_formats.c	2026-02-04 22:40:00
++++ b/src/vrend/vrend_formats.c	2026-02-04 22:40:00
+@@ -164,7 +164,12 @@
+ 
+ 
+ static struct vrend_format_table la_formats_fallback[] = {
++#ifdef __APPLE__
++  /* Desktop GL Core Profile: A8_UNORM uses GL_R8 with OOOR swizzle for text rendering */
++  { VIRGL_FORMAT_A8_UNORM, GL_R8, GL_RED, GL_UNSIGNED_BYTE, OOOR_SWIZZLE, view_class_32 },
++#else
+   { VIRGL_FORMAT_A8_UNORM, GL_R8, GL_RED, GL_UNSIGNED_BYTE, OOOR_SWIZZLE, view_class_unsupported },
++#endif
+   { VIRGL_FORMAT_L8_UNORM, GL_R8, GL_RED, GL_UNSIGNED_BYTE, RRR1_SWIZZLE, view_class_unsupported },
+   { VIRGL_FORMAT_A16_UNORM, GL_R16, GL_RED, GL_UNSIGNED_SHORT, OOOR_SWIZZLE, view_class_unsupported },
+   { VIRGL_FORMAT_L16_UNORM, GL_R16, GL_RED, GL_UNSIGNED_SHORT, RRR1_SWIZZLE, view_class_unsupported },

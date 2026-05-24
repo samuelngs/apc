@@ -1,0 +1,49 @@
+--- a/src/vrend/vrend_renderer.c	2026-02-01 12:59:37
++++ b/src/vrend/vrend_renderer.c	2026-02-01 13:03:25
+@@ -2923,6 +2923,10 @@
+         }
+ 
+         if (vrend_state.use_gles) {
++           for (unsigned int i = 0; i < 4; ++i) {
++              glTexParameteri(view->target, GL_TEXTURE_SWIZZLE_R + i, view->gl_swizzle[i]);
++           }
++        } else if (vrend_state.use_core_profile) {
+            for (unsigned int i = 0; i < 4; ++i) {
+               glTexParameteri(view->target, GL_TEXTURE_SWIZZLE_R + i, view->gl_swizzle[i]);
+            }
+@@ -3797,6 +3801,12 @@
+                   for (unsigned int i = 0; i < 4; ++i) {
+                      if (tex->cur_swizzle[i] != view->gl_swizzle[i]) {
+                          glTexParameteri(view->texture->target, GL_TEXTURE_SWIZZLE_R + i, view->gl_swizzle[i]);
++                     }
++                  }
++               } else if (vrend_state.use_core_profile) {
++                  for (unsigned int i = 0; i < 4; ++i) {
++                     if (tex->cur_swizzle[i] != view->gl_swizzle[i]) {
++                        glTexParameteri(view->texture->target, GL_TEXTURE_SWIZZLE_R + i, view->gl_swizzle[i]);
+                      }
+                   }
+                } else
+@@ -5341,6 +5351,10 @@
+             static const GLint swizzle[] = {GL_RED,GL_GREEN,GL_BLUE,GL_ALPHA};
+             if (memcmp(tex->cur_swizzle, swizzle, 4 * sizeof(GLint))) {
+                if (vrend_state.use_gles) {
++                  for (unsigned int i = 0; i < 4; ++i) {
++                     glTexParameteri(tview->texture->target, GL_TEXTURE_SWIZZLE_R + i, swizzle[i]);
++                  }
++               } else if (vrend_state.use_core_profile) {
+                   for (unsigned int i = 0; i < 4; ++i) {
+                      glTexParameteri(tview->texture->target, GL_TEXTURE_SWIZZLE_R + i, swizzle[i]);
+                   }
+@@ -7830,6 +7830,11 @@
+
+    if (vrend_state.use_gles) {
+       vrend_build_format_list_gles();
++   } else if (vrend_state.use_core_profile) {
++      /* Desktop GL Core Profile: use standard GL format list.
++       * Note: Apple's OpenGL framework is frozen (2018), texture swizzle may be buggy.
++       * BGRA formats use shader swizzle via bgra-unified.patch instead. */
++      vrend_build_format_list_gl();
+    } else {
+       vrend_build_format_list_gl();
+    }

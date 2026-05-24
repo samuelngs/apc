@@ -1,0 +1,27 @@
+diff --git a/src/vrend/vrend_winsys_egl.c b/src/vrend/vrend_winsys_egl.c
+index 1111111..2222222 100644
+--- a/src/vrend/vrend_winsys_egl.c
++++ b/src/vrend/vrend_winsys_egl.c
+@@ -32,6 +32,22 @@
+
+ #define EGL_EGLEXT_PROTOTYPES
+ #include <errno.h>
++
++/* ANGLE-specific EGL extension attributes for Metal.
++ * These are defined in ANGLE's eglext_angle.h but we can't include it
++ * directly because epoxy/egl.h sets __eglext_h_ which prevents the
++ * system eglext.h from being included. Define them here instead.
++ */
++#ifdef ENABLE_METAL
++#ifndef EGL_METAL_DEVICE_ANGLE
++#define EGL_METAL_DEVICE_ANGLE 0x34A6
++#endif
++
++#ifndef EGL_METAL_TEXTURE_ANGLE
++#define EGL_METAL_TEXTURE_ANGLE 0x34A7
++#endif
++#endif
++
+ #include <fcntl.h>
+ #ifdef WIN32
+ #include <d3d11.h>

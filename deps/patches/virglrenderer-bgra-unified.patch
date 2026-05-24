@@ -1,0 +1,40 @@
+--- a/src/vrend/vrend_renderer.c
++++ b/src/vrend/vrend_renderer.c
+@@ -889,6 +889,8 @@
+ static void vrend_destroy_query_object(void *obj_ptr);
+ static void vrend_finish_context_switch(struct vrend_context *ctx);
+ static void vrend_patch_blend_state(struct vrend_sub_context *sub_ctx);
++
++static void vrend_swizzle_data_bgra(uint64_t size, void *data);
+ static void vrend_update_frontface_state(struct vrend_sub_context *ctx);
+ static void vrend_destroy_program(struct vrend_linked_shader_program *ent);
+ static void vrend_apply_sampler_state(struct vrend_sub_context *sub_ctx,
+@@ -3189,14 +3189,16 @@
+       continue;
+
+       /* glTextureView() is not applied to eglimage-backed surfaces, because it
+        * causes unintended format interpretation errors. But a swizzle may still
+        * be necessary, e.g. for rgb* views on bgr* resources. Ensure this
+        * happens by adding a shader swizzle to the final write of such surfaces.
+        */
+-      if (vrend_resource_needs_redblue_swizzle(surf->texture, surf->format))
++      bool needs_swizzle = vrend_resource_needs_redblue_swizzle(surf->texture, surf->format);
++
++      if (needs_swizzle)
+          sub_ctx->swizzle_output_rgb_to_bgr |= 1 << i;
+
+       /* glTextureView() on eglimage-backed bgr* textures for is not supported.
+        * To work around this for colorspace conversion, views are avoided
+        * manual colorspace conversion is instead injected in the fragment
+        * shader writing to such surfaces and during glClearColor(). */
+       if (util_format_is_srgb(surf->format) &&
+--- a/src/vrend/vrend_renderer.h
++++ b/src/vrend/vrend_renderer.h
+@@ -115,6 +115,7 @@
+    uint32_t blob_id;
+    struct list_head head;
+    bool is_imported;
++   bool bgra_swizzled;
+ };
+
+ #define VIRGL_TEXTURE_NEED_SWIZZLE        (1 << 0)

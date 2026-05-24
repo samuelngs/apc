@@ -1,0 +1,38 @@
+--- a/src/vrend/vrend_winsys.c
++++ b/src/vrend/vrend_winsys.c
+@@ -55,6 +55,14 @@ int vrend_winsys_init(uint32_t flags, int preferred_fd)
+
+       use_context = CONTEXT_EGL;
+ #else
++#if defined(HAVE_EPOXY_EGL_H)
++      (void)preferred_fd;
++      egl = virgl_egl_init(EGL_DEFAULT_DISPLAY, true, true);
++      if (!egl) {
++         virgl_error("EGL initialization failed (surfaceless/GLES)\n");
++         return -1;
++      }
++      use_context = CONTEXT_EGL;
++#else
+       (void)preferred_fd;
+       virgl_error("EGL is not supported on this platform\n");
+       return -1;
++#endif
+ #endif
+@@ -99,6 +107,15 @@ void vrend_winsys_cleanup(void)
+       free(egl);
+       egl = NULL;
+       use_context = CONTEXT_NONE;
+    }
+ #endif
++#elif defined(HAVE_EPOXY_EGL_H)
++   if (use_context == CONTEXT_EGL) {
++      virgl_egl_destroy(egl);
++      egl = NULL;
++      use_context = CONTEXT_NONE;
++   } else if (use_context == CONTEXT_EGL_EXTERNAL) {
++      free(egl);
++      egl = NULL;
++      use_context = CONTEXT_NONE;
++   }
++#endif
+ #ifdef HAVE_EPOXY_GLX_H

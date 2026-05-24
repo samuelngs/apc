@@ -1,0 +1,13 @@
+# Cargo
+target/
+
+# Native dependency sources and build artifacts
+deps/src/
+deps/built/
+deps/out/
+
+# Guest VM build artifacts
+guest/out/
+
+# macOS
+.DS_Store

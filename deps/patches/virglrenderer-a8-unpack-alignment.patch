@@ -1,0 +1,27 @@
+--- a/src/vrend/vrend_renderer.c
++++ b/src/vrend/vrend_renderer.c
+@@ -9663,6 +9663,13 @@
+                VREND_DEBUG(dbg_bgra, ctx, "manually swizzling bgra->rgba on upload since gles+bgra\n");
+                vrend_swizzle_data_bgra(send_size, data);
+             }
++
++            /* A8_UNORM (R8) textures have 1 byte per pixel.
++             * Default GL_UNPACK_ALIGNMENT is 4, which causes skewed texture data.
++             * Must set to 1 for correct upload of font glyphs and other 1-bpp textures. */
++            if (res->base.format == VIRGL_FORMAT_A8_UNORM) {
++               glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
++            }
+          }
+
+          /* mipmaps are usually passed in one iov, and we need to keep the offset
+@@ -9722,6 +9729,11 @@
+                               glformat, gltype, data);
+             }
++
++      /* Restore default unpack alignment after A8_UNORM upload */
++      if (res->base.format == VIRGL_FORMAT_A8_UNORM) {
++         glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
++      }
+          }
+          if (res->base.format == VIRGL_FORMAT_Z24X8_UNORM) {
+             if (!vrend_state.use_core_profile)
