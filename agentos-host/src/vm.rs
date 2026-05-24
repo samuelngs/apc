@@ -10,6 +10,7 @@ pub struct VmConfig {
     pub memory_mb: u64,
     pub display_width: u32,
     pub display_height: u32,
+    pub display_scale: u32,
     pub shared_dir: Option<PathBuf>,
     pub mcp_test: bool,
 }
@@ -63,7 +64,8 @@ pub mod krun {
                 CString::new(p.to_str().unwrap_or(""))
             }).transpose()?;
 
-            let cmdline = CString::new(config.cmdline.as_str())?;
+            let cmdline_with_scale = format!("{} agentos.scale={}", config.cmdline, config.display_scale);
+            let cmdline = CString::new(cmdline_with_scale.as_str())?;
 
             check(
                 krun_set_kernel(
@@ -87,11 +89,13 @@ pub mod krun {
                     "krun_set_gpu_options2",
                 )?;
 
+                let phys_w = config.display_width * config.display_scale;
+                let phys_h = config.display_height * config.display_scale;
                 let display_id = check(
-                    krun_add_display(ctx, config.display_width, config.display_height),
+                    krun_add_display(ctx, phys_w, phys_h),
                     "krun_add_display",
                 )?;
-                tracing::info!(display_id, "display added");
+                tracing::info!(display_id, phys_w, phys_h, scale = config.display_scale, "display added");
 
                 let backend = Box::new(display::create_backend());
                 let backend_ptr = &*backend as *const KrunDisplayBackend as *const std::ffi::c_void;
@@ -186,7 +190,7 @@ pub mod krun {
             tracing::info!(
                 cpus = config.cpus,
                 memory_mb = config.memory_mb,
-                display = format!("{}x{}", config.display_width, config.display_height),
+                display = format!("{}x{}@{}x", config.display_width, config.display_height, config.display_scale),
                 mcp_socket = mcp_socket_path,
                 "VM configured via libkrun"
             );

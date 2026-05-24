@@ -43,6 +43,10 @@ pub struct Cli {
     #[arg(long, default_value = "1080")]
     height: u32,
 
+    /// Display scale factor (2 = HiDPI/Retina)
+    #[arg(long, default_value = "2")]
+    scale: u32,
+
     /// Shared directory (VirtioFS)
     #[arg(long)]
     share: Option<PathBuf>,
@@ -66,6 +70,7 @@ fn main() -> anyhow::Result<()> {
         memory_mb: cli.memory,
         display_width: cli.width,
         display_height: cli.height,
+        display_scale: cli.scale.max(1),
         shared_dir: cli.share,
         mcp_test: cli.mcp_test,
     };

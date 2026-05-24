@@ -91,6 +91,9 @@ const NSEC_PER_MSEC: u64 = 1_000_000;
 
 
 #[cfg(target_os = "macos")]
+static DISPLAY_SCALE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+
+#[cfg(target_os = "macos")]
 static LAST_DISPLAYED_SURFACE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 #[cfg(target_os = "macos")]
@@ -158,9 +161,29 @@ define_class!(
             crate::input::sync_modifiers(event.modifierFlags());
         }
 
+        #[unsafe(method(mouseEntered:))]
+        fn mouseEntered(&self, _event: &NSEvent) {
+            unsafe {
+                let cls = objc2::runtime::AnyClass::get(c"NSCursor").unwrap();
+                let _: () = msg_send![cls, hide];
+            }
+        }
+
+        #[unsafe(method(mouseExited:))]
+        fn mouseExited(&self, _event: &NSEvent) {
+            unsafe {
+                let cls = objc2::runtime::AnyClass::get(c"NSCursor").unwrap();
+                let _: () = msg_send![cls, unhide];
+            }
+        }
+
         #[unsafe(method(resignFirstResponder))]
         fn resignFirstResponder_(&self) -> bool {
             crate::input::release_all_modifiers();
+            unsafe {
+                let cls = objc2::runtime::AnyClass::get(c"NSCursor").unwrap();
+                let _: () = msg_send![cls, unhide];
+            }
             true
         }
 
@@ -275,7 +298,8 @@ impl FramebufferView {
         let view: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
         view.setWantsLayer(true);
         if let Some(layer) = view.layer() {
-            layer.setContentsScale(1.0);
+            let scale = DISPLAY_SCALE.load(std::sync::atomic::Ordering::Relaxed);
+            layer.setContentsScale(scale.max(1) as f64);
             layer.setContentsGravity(unsafe { objc2_quartz_core::kCAGravityResizeAspect });
             layer.setOpaque(true);
         }
@@ -387,6 +411,7 @@ impl AppDelegate {
     }
 
     fn create_viewer_window(&self, mtm: MainThreadMarker, config: &VmConfig) {
+        DISPLAY_SCALE.store(config.display_scale, std::sync::atomic::Ordering::Relaxed);
         let w = config.display_width as f64;
         let h = config.display_height as f64;
 

@@ -81,8 +81,8 @@ use crate::input::CursorShape;
 
 #[cfg(target_os = "linux")]
 use crate::render::{
-    GbmDrmCompositor, RedrawState, TASKBAR_HEIGHT,
-    create_solid_buffer, queue_redraw, render_frame,
+    GbmDrmCompositor, RedrawState,
+    create_solid_buffer, queue_redraw, render_frame, taskbar_height,
 };
 
 #[cfg(target_os = "linux")]
@@ -144,6 +144,8 @@ pub(crate) struct AgentCompositor {
     pub(crate) popup_manager: PopupManager,
     pub(crate) minimized_windows: Vec<(Window, Point<i32, Logical>)>,
 
+    pub(crate) scale_factor: i32,
+
     pub(crate) wayland_display: String,
     pub(crate) mcp_tx: calloop::channel::Sender<crate::mcp::McpCommand>,
 }
@@ -193,8 +195,11 @@ impl XdgShellHandler for AgentCompositor {
     }
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
+        let s = self.scale_factor;
         let output_size = self.output.current_mode().map(|m| m.size).unwrap_or((1920, 1080).into());
-        let usable: Size<i32, Logical> = (output_size.w as i32, output_size.h as i32 - TASKBAR_HEIGHT).into();
+        let logical_w = output_size.w as i32 / s;
+        let logical_h = output_size.h as i32 / s;
+        let usable: Size<i32, Logical> = (logical_w, logical_h - taskbar_height(1)).into();
         surface.with_pending_state(|s| {
             s.size = Some(usable);
         });
@@ -273,12 +278,15 @@ impl XdgShellHandler for AgentCompositor {
     }
 
     fn maximize_request(&mut self, surface: ToplevelSurface) {
+        let s = self.scale_factor;
         let output_size = self
             .output
             .current_mode()
             .map(|m| m.size)
             .unwrap_or((1920, 1080).into());
-        let usable: Size<i32, Logical> = (output_size.w as i32, output_size.h as i32 - TASKBAR_HEIGHT).into();
+        let logical_w = output_size.w as i32 / s;
+        let logical_h = output_size.h as i32 / s;
+        let usable: Size<i32, Logical> = (logical_w, logical_h - taskbar_height(1)).into();
         surface.with_pending_state(|s| {
             s.size = Some(usable);
             s.states.set(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Maximized);
@@ -528,10 +536,17 @@ pub fn run() -> Result<()> {
         size: (mode_size.0 as i32, mode_size.1 as i32).into(),
         refresh: mode.vrefresh() as i32 * 1000,
     };
+    let scale_factor: i32 = std::env::var("AGENTOS_SCALE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1)
+        .max(1);
+    tracing::info!(scale_factor, "output scale factor");
+
     output.change_current_state(
         Some(output_mode),
         Some(Transform::Normal),
-        None,
+        Some(smithay::output::Scale::Integer(scale_factor)),
         Some((0, 0).into()),
     );
     output.set_preferred(output_mode);
@@ -647,14 +662,14 @@ pub fn run() -> Result<()> {
     let mut space = Space::default();
     space.map_output(&output, (0, 0));
 
-    let cursor_theme = crate::cursor::CursorTheme::load();
+    let cursor_theme = crate::cursor::CursorTheme::load(scale_factor);
     let cursor_default = cursor_theme.load_cursor("left_ptr");
     let cursor_resize_nwse = cursor_theme.load_cursor("top_left_corner");
     let cursor_resize_nesw = cursor_theme.load_cursor("top_right_corner");
     let cursor_resize_ns = cursor_theme.load_cursor("sb_v_double_arrow");
     let cursor_resize_ew = cursor_theme.load_cursor("sb_h_double_arrow");
     let output_w = mode_size.0 as i32;
-    let taskbar_bg = create_solid_buffer(output_w, TASKBAR_HEIGHT, 30, 30, 30, 255);
+    let taskbar_bg = create_solid_buffer(output_w, crate::render::taskbar_height(scale_factor), 30, 30, 30, 255, scale_factor);
 
     let (_mcp, mcp_tx) = crate::mcp::start(loop_handle.clone())?;
 
@@ -686,6 +701,7 @@ pub fn run() -> Result<()> {
         taskbar_buttons: Vec::new(),
         popup_manager: PopupManager::default(),
         minimized_windows: Vec::new(),
+        scale_factor,
         wayland_display: socket_name.clone(),
         mcp_tx,
     };

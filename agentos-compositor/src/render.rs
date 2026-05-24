@@ -53,15 +53,26 @@ pub(crate) type GbmDrmCompositor = DrmCompositor<
 >;
 
 #[cfg(target_os = "linux")]
-pub(crate) const TASKBAR_HEIGHT: i32 = 36;
+const BASE_TASKBAR_HEIGHT: i32 = 36;
 #[cfg(target_os = "linux")]
-pub(crate) const TASKBAR_BTN_WIDTH: i32 = 140;
+const BASE_TASKBAR_BTN_WIDTH: i32 = 140;
 #[cfg(target_os = "linux")]
-pub(crate) const TASKBAR_BTN_HEIGHT: i32 = 28;
+const BASE_TASKBAR_BTN_HEIGHT: i32 = 28;
 #[cfg(target_os = "linux")]
-pub(crate) const TASKBAR_BTN_GAP: i32 = 4;
+const BASE_TASKBAR_BTN_GAP: i32 = 4;
 #[cfg(target_os = "linux")]
-pub(crate) const TASKBAR_BTN_MARGIN: i32 = 4;
+const BASE_TASKBAR_BTN_MARGIN: i32 = 4;
+
+#[cfg(target_os = "linux")]
+pub(crate) fn taskbar_height(scale: i32) -> i32 { BASE_TASKBAR_HEIGHT * scale }
+#[cfg(target_os = "linux")]
+pub(crate) fn taskbar_btn_width(scale: i32) -> i32 { BASE_TASKBAR_BTN_WIDTH * scale }
+#[cfg(target_os = "linux")]
+pub(crate) fn taskbar_btn_height(scale: i32) -> i32 { BASE_TASKBAR_BTN_HEIGHT * scale }
+#[cfg(target_os = "linux")]
+pub(crate) fn taskbar_btn_gap(scale: i32) -> i32 { BASE_TASKBAR_BTN_GAP * scale }
+#[cfg(target_os = "linux")]
+pub(crate) fn taskbar_btn_margin(scale: i32) -> i32 { BASE_TASKBAR_BTN_MARGIN * scale }
 
 #[cfg(target_os = "linux")]
 #[derive(Debug, Default)]
@@ -75,13 +86,13 @@ pub(crate) enum RedrawState {
 }
 
 #[cfg(target_os = "linux")]
-pub(crate) fn create_solid_buffer(w: i32, h: i32, r: u8, g: u8, b: u8, a: u8) -> MemoryRenderBuffer {
+pub(crate) fn create_solid_buffer(w: i32, h: i32, r: u8, g: u8, b: u8, a: u8, scale: i32) -> MemoryRenderBuffer {
     let data = vec![[r, g, b, a]; (w * h) as usize].into_iter().flatten().collect::<Vec<u8>>();
     MemoryRenderBuffer::from_slice(
         &data,
         DrmFourcc::Abgr8888,
         (w, h),
-        1,
+        scale,
         Transform::Normal,
         None,
     )
@@ -112,6 +123,8 @@ pub(crate) fn render_frame(state: &mut AgentCompositor) {
     )
     .unwrap_or_default();
 
+    let s = state.scale_factor;
+    let sf = s as f64;
     let pointer_loc = state.pointer.current_location();
     let mut elements: Vec<OutputRenderElements<GlesRenderer, _>> = Vec::new();
 
@@ -123,8 +136,8 @@ pub(crate) fn render_frame(state: &mut AgentCompositor) {
         super::input::CursorShape::ResizeEW => &state.cursor_resize_ew,
     };
     let cursor_pos = (
-        pointer_loc.x - cursor.hotspot.0 as f64,
-        pointer_loc.y - cursor.hotspot.1 as f64,
+        pointer_loc.x * sf - cursor.hotspot.0 as f64,
+        pointer_loc.y * sf - cursor.hotspot.1 as f64,
     );
     if let Ok(cursor_elem) = MemoryRenderBufferRenderElement::from_buffer(
         &mut state.renderer,
@@ -138,8 +151,14 @@ pub(crate) fn render_frame(state: &mut AgentCompositor) {
         elements.push(OutputRenderElements::Cursor(cursor_elem));
     }
 
+    let tb_h = taskbar_height(s);
+    let btn_w = taskbar_btn_width(s);
+    let btn_h = taskbar_btn_height(s);
+    let btn_gap = taskbar_btn_gap(s);
+    let btn_margin = taskbar_btn_margin(s);
+
     let output_h = state.output.current_mode().map(|m| m.size.h).unwrap_or(1080);
-    let taskbar_y = (output_h - TASKBAR_HEIGHT) as f64;
+    let taskbar_y = (output_h - tb_h) as f64;
 
     let focused_surface = state.seat.get_keyboard().and_then(|kb| kb.current_focus());
     let mut new_buttons: Vec<(String, bool, bool, MemoryRenderBuffer)> = Vec::new();
@@ -151,20 +170,20 @@ pub(crate) fn render_frame(state: &mut AgentCompositor) {
             .unwrap_or(false);
         let label = if title.is_empty() { "Window".to_string() } else { title };
         let (r, g, b) = if is_focused { (80, 80, 120) } else { (50, 50, 50) };
-        let btn_buf = create_solid_buffer(TASKBAR_BTN_WIDTH, TASKBAR_BTN_HEIGHT, r, g, b, 255);
+        let btn_buf = create_solid_buffer(btn_w, btn_h, r, g, b, 255, s);
         new_buttons.push((label, is_focused, false, btn_buf));
     }
     for (window, _) in &state.minimized_windows {
         let title = get_window_title(window);
         let label = if title.is_empty() { "Window".to_string() } else { title };
-        let btn_buf = create_solid_buffer(TASKBAR_BTN_WIDTH, TASKBAR_BTN_HEIGHT, 35, 35, 35, 255);
+        let btn_buf = create_solid_buffer(btn_w, btn_h, 35, 35, 35, 255, s);
         new_buttons.push((label, false, true, btn_buf));
     }
     state.taskbar_buttons = new_buttons;
 
     for (i, (_, _, _, btn_buf)) in state.taskbar_buttons.iter().enumerate() {
-        let x = (TASKBAR_BTN_MARGIN + i as i32 * (TASKBAR_BTN_WIDTH + TASKBAR_BTN_GAP)) as f64;
-        let y = taskbar_y + ((TASKBAR_HEIGHT - TASKBAR_BTN_HEIGHT) / 2) as f64;
+        let x = (btn_margin + i as i32 * (btn_w + btn_gap)) as f64;
+        let y = taskbar_y + ((tb_h - btn_h) / 2) as f64;
         if let Ok(btn) = MemoryRenderBufferRenderElement::from_buffer(
             &mut state.renderer, (x, y), btn_buf, None, None, None, Kind::Unspecified,
         ) {
@@ -261,9 +280,10 @@ pub(crate) fn capture_screen(state: &mut AgentCompositor) -> Result<(u32, u32, S
     let pointer_loc = state.pointer.current_location();
     let mut elements: Vec<OutputRenderElements<GlesRenderer, _>> = Vec::new();
 
+    let sf = state.scale_factor as f64;
     let cursor_pos = (
-        pointer_loc.x - state.cursor_default.hotspot.0 as f64,
-        pointer_loc.y - state.cursor_default.hotspot.1 as f64,
+        pointer_loc.x * sf - state.cursor_default.hotspot.0 as f64,
+        pointer_loc.y * sf - state.cursor_default.hotspot.1 as f64,
     );
     if let Ok(cursor_elem) = MemoryRenderBufferRenderElement::from_buffer(
         &mut state.renderer,
@@ -278,7 +298,8 @@ pub(crate) fn capture_screen(state: &mut AgentCompositor) -> Result<(u32, u32, S
     }
 
     let output_h = h;
-    let taskbar_y = (output_h - TASKBAR_HEIGHT) as f64;
+    let tb_h = taskbar_height(state.scale_factor);
+    let taskbar_y = (output_h - tb_h) as f64;
     if let Ok(bg) = MemoryRenderBufferRenderElement::from_buffer(
         &mut state.renderer,
         (0.0, taskbar_y),
@@ -291,9 +312,13 @@ pub(crate) fn capture_screen(state: &mut AgentCompositor) -> Result<(u32, u32, S
         elements.push(OutputRenderElements::Cursor(bg));
     }
 
+    let btn_w = taskbar_btn_width(state.scale_factor);
+    let btn_gap = taskbar_btn_gap(state.scale_factor);
+    let btn_margin = taskbar_btn_margin(state.scale_factor);
+    let btn_h = taskbar_btn_height(state.scale_factor);
     for (i, (_, _, _, btn_buf)) in state.taskbar_buttons.iter().enumerate() {
-        let x = (TASKBAR_BTN_MARGIN + i as i32 * (TASKBAR_BTN_WIDTH + TASKBAR_BTN_GAP)) as f64;
-        let y = taskbar_y + ((TASKBAR_HEIGHT - TASKBAR_BTN_HEIGHT) / 2) as f64;
+        let x = (btn_margin + i as i32 * (btn_w + btn_gap)) as f64;
+        let y = taskbar_y + ((tb_h - btn_h) / 2) as f64;
         if let Ok(btn) = MemoryRenderBufferRenderElement::from_buffer(
             &mut state.renderer, (x, y), btn_buf, None, None, None, Kind::Unspecified,
         ) {

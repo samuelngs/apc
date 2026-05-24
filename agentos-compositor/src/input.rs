@@ -18,7 +18,7 @@ use smithay::{
 use super::grabs::ResizeSurfaceGrab;
 
 #[cfg(target_os = "linux")]
-use super::render::{queue_redraw, TASKBAR_HEIGHT, TASKBAR_BTN_WIDTH, TASKBAR_BTN_GAP, TASKBAR_BTN_MARGIN};
+use super::render::{queue_redraw, taskbar_height, taskbar_btn_width, taskbar_btn_gap, taskbar_btn_margin};
 #[cfg(target_os = "linux")]
 use super::state::AgentCompositor;
 
@@ -86,13 +86,14 @@ pub(crate) fn detect_resize_edge(
 ) -> Option<(Window, u32)> {
     let windows: Vec<_> = state.space.elements().cloned().collect();
     for window in windows.iter().rev() {
-        let bbox = state.space.element_bbox(window)?;
+        let loc = state.space.element_location(window)?;
+        let geo = window.geometry();
         let x = location.x;
         let y = location.y;
-        let bx = bbox.loc.x as f64;
-        let by = bbox.loc.y as f64;
-        let bw = bbox.size.w as f64;
-        let bh = bbox.size.h as f64;
+        let bx = (loc.x + geo.loc.x) as f64;
+        let by = (loc.y + geo.loc.y) as f64;
+        let bw = geo.size.w as f64;
+        let bh = geo.size.h as f64;
 
         let dx_left = x - bx;
         let dx_right = (bx + bw) - x;
@@ -192,12 +193,13 @@ pub(crate) fn handle_input(state: &mut AgentCompositor, event: InputEvent<Libinp
 
             if is_left && event.state() == smithay::backend::input::ButtonState::Pressed {
                 let location = pointer.current_location();
-                let output_h = state.output.current_mode().map(|m| m.size.h).unwrap_or(1080) as f64;
-                let taskbar_y = output_h - TASKBAR_HEIGHT as f64;
+                let s = state.scale_factor;
+                let logical_h = state.output.current_mode().map(|m| m.size.h).unwrap_or(1080) as f64 / s as f64;
+                let taskbar_y = logical_h - taskbar_height(1) as f64;
 
                 if location.y >= taskbar_y {
-                    let btn_x = location.x - TASKBAR_BTN_MARGIN as f64;
-                    let idx = (btn_x / (TASKBAR_BTN_WIDTH + TASKBAR_BTN_GAP) as f64) as usize;
+                    let btn_x = location.x - taskbar_btn_margin(1) as f64;
+                    let idx = (btn_x / (taskbar_btn_width(1) + taskbar_btn_gap(1)) as f64) as usize;
                     let visible: Vec<Window> = state.space.elements().cloned().collect();
                     let visible_count = visible.len();
                     if idx < visible_count {
