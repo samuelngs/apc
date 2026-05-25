@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "agentos": {
+      "type": "stdio",
+      "command": "target/release/agentos-host",
+      "args": [
+        "--kernel", "guest/out/aarch64/vmlinuz",
+        "--initrd", "guest/out/aarch64/initramfs",
+        "--disk", "guest/out/aarch64/disk.img",
+        "--mcp-stdio"
+      ]
+    }
+  }
+}

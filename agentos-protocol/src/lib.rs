@@ -349,11 +349,12 @@ pub fn mcp_tool_schemas() -> Vec<serde_json::Value> {
     .clone()
 }
 
+const UNIT_VARIANTS: &[&str] = &["window_list"];
+
 pub fn toolcall_from_mcp(name: &str, args: &serde_json::Value) -> Result<ToolCall, String> {
     let mut obj = serde_json::Map::new();
     obj.insert("tool".into(), serde_json::Value::String(name.into()));
-    let has_fields = args.as_object().map(|m| !m.is_empty()).unwrap_or(false);
-    if has_fields {
+    if !UNIT_VARIANTS.contains(&name) {
         obj.insert("params".into(), args.clone());
     }
     serde_json::from_value(serde_json::Value::Object(obj))
