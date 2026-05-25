@@ -14,13 +14,15 @@ use smithay::{
             damage::OutputDamageTracker,
             element::{
                 memory::{MemoryRenderBuffer, MemoryRenderBufferRenderElement},
+                surface::WaylandSurfaceRenderElement,
                 Kind,
             },
             gles::{GlesRenderer, GlesRenderbuffer},
             Bind, ExportMem, ImportAll, ImportMem, Offscreen,
         },
     },
-    desktop::{space::space_render_elements, space::SpaceRenderElements},
+    backend::renderer::element::AsRenderElements,
+    desktop::{space::space_render_elements, space::SpaceRenderElements, Window},
     output::Mode as OutputMode,
     utils::{Buffer as BufferCoord, Physical, Rectangle, Scale, Size, Transform},
 };
@@ -149,18 +151,10 @@ pub(crate) fn queue_redraw(state: &mut AgentCompositor) {
 
 #[cfg(target_os = "linux")]
 pub(crate) fn render_frame(state: &mut AgentCompositor) {
-    let space_elements: Vec<SpaceRenderElements<GlesRenderer, _>> = space_render_elements(
-        &mut state.renderer,
-        [&state.space],
-        &state.output,
-        1.0,
-    )
-    .unwrap_or_default();
-
     let s = state.scale_factor;
     let sf = s as f64;
     let pointer_loc = state.pointer.current_location();
-    let mut elements: Vec<OutputRenderElements<GlesRenderer, _>> = Vec::new();
+    let mut elements: Vec<OutputRenderElements<GlesRenderer, WaylandSurfaceRenderElement<GlesRenderer>>> = Vec::new();
 
     let cursor = match state.cursor_shape {
         super::input::CursorShape::Default => &state.cursor_default,
@@ -261,30 +255,33 @@ pub(crate) fn render_frame(state: &mut AgentCompositor) {
     }
 
     let s_f64 = s as f64;
-    for window in state.space.elements() {
-        if !state.is_ssd(window) {
-            continue;
+    let output_scale = state.output.current_scale().fractional_scale();
+    let windows: Vec<Window> = state.space.elements().rev().cloned().collect();
+    for window in &windows {
+        if state.is_ssd(window) {
+            if let Some(loc) = state.space.element_location(window) {
+                let win_w = window.geometry().size.w;
+                let title = super::taskbar::get_window_title(window);
+                let label = if title.is_empty() { "Window".to_string() } else { title };
+                let bar_w = win_w * s;
+                let bar_h = SSD_TITLE_BAR_HEIGHT * s;
+                let bar_buf = create_label_buffer(bar_w, bar_h, 50, 50, 60, &label, 12.0 * s as f32, 8 * s, s);
+                let bar_x = loc.x as f64 * s_f64;
+                let bar_y = (loc.y - SSD_TITLE_BAR_HEIGHT) as f64 * s_f64;
+                if let Ok(bar_elem) = MemoryRenderBufferRenderElement::from_buffer(
+                    &mut state.renderer, (bar_x, bar_y), &bar_buf, None, None, None, Kind::Unspecified,
+                ) {
+                    elements.push(OutputRenderElements::Cursor(bar_elem));
+                }
+            }
         }
-        let loc = match state.space.element_location(window) {
-            Some(l) => l,
-            None => continue,
-        };
-        let win_w = window.geometry().size.w;
-        let title = super::taskbar::get_window_title(window);
-        let label = if title.is_empty() { "Window".to_string() } else { title };
-        let bar_w = win_w * s;
-        let bar_h = SSD_TITLE_BAR_HEIGHT * s;
-        let bar_buf = create_label_buffer(bar_w, bar_h, 50, 50, 60, &label, 12.0 * s as f32, 8 * s, s);
-        let bar_x = loc.x as f64 * s_f64;
-        let bar_y = (loc.y - SSD_TITLE_BAR_HEIGHT) as f64 * s_f64;
-        if let Ok(bar_elem) = MemoryRenderBufferRenderElement::from_buffer(
-            &mut state.renderer, (bar_x, bar_y), &bar_buf, None, None, None, Kind::Unspecified,
-        ) {
-            elements.push(OutputRenderElements::Cursor(bar_elem));
-        }
-    }
 
-    elements.extend(space_elements.into_iter().map(OutputRenderElements::Space));
+        let loc = state.space.element_location(window).unwrap_or_default();
+        let physical_loc = loc.to_physical_precise_round(output_scale);
+        let win_elems: Vec<SpaceRenderElements<GlesRenderer, WaylandSurfaceRenderElement<GlesRenderer>>> =
+            window.render_elements(&mut state.renderer, physical_loc, Scale::from(output_scale), 1.0);
+        elements.extend(win_elems.into_iter().map(OutputRenderElements::Space));
+    }
 
     static FRAME_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let frame = FRAME_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

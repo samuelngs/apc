@@ -175,26 +175,31 @@ enum SsdHit {
 
 #[cfg(target_os = "linux")]
 fn ssd_hit_test(state: &AgentCompositor, location: Point<f64, Logical>) -> Option<SsdHit> {
+    let x = location.x;
+    let y = location.y;
     let windows: Vec<_> = state.space.elements().cloned().collect();
-    for window in windows.iter().rev() {
-        if !state.is_ssd(window) {
-            continue;
-        }
-        let loc = match state.space.element_location(window) {
+    for window in &windows {
+        let loc = match state.space.element_location(&window) {
             Some(l) => l,
             None => continue,
         };
         let geo = window.geometry();
         let win_w = geo.size.w as f64;
         let win_h = geo.size.h as f64;
-        let title_h = SSD_TITLE_BAR_HEIGHT as f64;
-        let top_y = loc.y as f64 - title_h;
         let left_x = loc.x as f64;
         let right_x = left_x + win_w;
-        let bottom_y = loc.y as f64 + win_h;
+        let content_top = loc.y as f64;
+        let bottom_y = content_top + win_h;
 
-        let x = location.x;
-        let y = location.y;
+        if !state.is_ssd(&window) {
+            if x >= left_x && x <= right_x && y >= content_top && y <= bottom_y {
+                return None;
+            }
+            continue;
+        }
+
+        let title_h = SSD_TITLE_BAR_HEIGHT as f64;
+        let top_y = content_top - title_h;
 
         if x < left_x - SSD_EDGE || x > right_x + SSD_EDGE
             || y < top_y - SSD_EDGE || y > bottom_y + SSD_EDGE
@@ -216,8 +221,12 @@ fn ssd_hit_test(state: &AgentCompositor, location: Point<f64, Logical>) -> Optio
             return Some(SsdHit::ResizeEdge(window.clone(), edges));
         }
 
-        if y >= top_y && y < loc.y as f64 && x >= left_x && x <= right_x {
+        if y >= top_y && y < content_top && x >= left_x && x <= right_x {
             return Some(SsdHit::TitleBar(window.clone()));
+        }
+
+        if x >= left_x && x <= right_x && y >= content_top && y <= bottom_y {
+            return None;
         }
     }
     None

@@ -537,12 +537,27 @@ impl XdgDecorationHandler for AgentCompositor {
         }
     }
 
-    fn request_mode(&mut self, toplevel: ToplevelSurface, _mode: DecorationMode) {
+    fn request_mode(&mut self, toplevel: ToplevelSurface, mode: DecorationMode) {
         toplevel.with_pending_state(|state| {
-            state.decoration_mode = Some(DecorationMode::ServerSide);
+            state.decoration_mode = Some(mode);
         });
         toplevel.send_configure();
-        self.ssd_windows.insert(toplevel.wl_surface().clone());
+        let surface = toplevel.wl_surface().clone();
+        if mode == DecorationMode::ClientSide {
+            if self.ssd_windows.remove(&surface) {
+                let win_and_loc: Option<(Window, Point<i32, Logical>)> = self.space.elements()
+                    .find(|w| w.toplevel().map(|t| t.wl_surface() == &surface).unwrap_or(false))
+                    .map(|w| {
+                        let loc = self.space.element_location(w).unwrap_or_default();
+                        (w.clone(), loc)
+                    });
+                if let Some((window, loc)) = win_and_loc {
+                    self.space.map_element(window, (loc.x, loc.y - crate::render::SSD_TITLE_BAR_HEIGHT), true);
+                }
+            }
+        } else {
+            self.ssd_windows.insert(surface);
+        }
     }
 
     fn unset_mode(&mut self, toplevel: ToplevelSurface) {
