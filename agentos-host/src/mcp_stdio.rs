@@ -1,21 +1,36 @@
 use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::os::unix::io::FromRawFd;
 use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
 
-/// Run a line-delimited JSON-RPC stdio proxy.
-///
-/// Reads lines from stdin, forwards each to the guest VM's MCP server via
-/// Unix socket at `socket_path`, reads the response line, and writes it to
-/// stdout. Exits when stdin reaches EOF.
+fn set_blocking(fd: i32) {
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        if flags >= 0 && (flags & libc::O_NONBLOCK) != 0 {
+            libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK);
+        }
+    }
+}
+
 pub fn run_stdio_proxy(socket_path: &str) -> anyhow::Result<()> {
     let stream = connect_with_retry(socket_path)?;
     let mut sock_reader = BufReader::new(stream.try_clone()?);
     let mut sock_writer = BufWriter::new(stream);
 
-    let stdin = std::io::stdin();
-    let stdin = stdin.lock();
-    let stdout = std::io::stdout();
-    let mut stdout = stdout.lock();
+    // libkrun sets inherited fds non-blocking. Dup AFTER VM start (connect_with_retry
+    // waits for the VM), then force blocking mode on the new fds.
+    let stdin_fd = unsafe { libc::dup(libc::STDIN_FILENO) };
+    let stdout_fd = unsafe { libc::dup(libc::STDOUT_FILENO) };
+    if stdin_fd < 0 || stdout_fd < 0 {
+        anyhow::bail!("failed to dup stdin/stdout");
+    }
+    set_blocking(stdin_fd);
+    set_blocking(stdout_fd);
+
+    let stdin_file = unsafe { std::fs::File::from_raw_fd(stdin_fd) };
+    let stdin = BufReader::new(stdin_file);
+    let stdout_file = unsafe { std::fs::File::from_raw_fd(stdout_fd) };
+    let mut stdout = BufWriter::new(stdout_file);
 
     for line_result in stdin.lines() {
         let line = match line_result {
@@ -26,7 +41,11 @@ pub fn run_stdio_proxy(socket_path: &str) -> anyhow::Result<()> {
             }
         };
 
-        // Forward request to socket (line-delimited)
+        // JSON-RPC notifications have no "id" — don't expect a response.
+        let is_notification = serde_json::from_str::<serde_json::Value>(&line)
+            .map(|v| v.get("id").is_none())
+            .unwrap_or(false);
+
         if let Err(e) = sock_writer
             .write_all(line.as_bytes())
             .and_then(|_| sock_writer.write_all(b"\n"))
@@ -36,7 +55,10 @@ pub fn run_stdio_proxy(socket_path: &str) -> anyhow::Result<()> {
             break;
         }
 
-        // Read response from socket
+        if is_notification {
+            continue;
+        }
+
         let mut response = String::new();
         match sock_reader.read_line(&mut response) {
             Ok(0) => {
@@ -50,11 +72,9 @@ pub fn run_stdio_proxy(socket_path: &str) -> anyhow::Result<()> {
             }
         }
 
-        // Write response to stdout (line-delimited)
         if let Err(e) = stdout
             .write_all(response.as_bytes())
             .and_then(|_| {
-                // Ensure the line ends with a newline
                 if !response.ends_with('\n') {
                     stdout.write_all(b"\n")
                 } else {

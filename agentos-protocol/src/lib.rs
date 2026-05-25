@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcRequest {
     pub jsonrpc: String,
+    #[serde(default)]
     pub id: serde_json::Value,
     pub method: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -150,3 +151,211 @@ pub struct ScreenshotResult {
 }
 
 pub const VSOCK_PORT: u32 = 9339;
+
+pub fn mcp_tool_schemas() -> Vec<serde_json::Value> {
+    serde_json::json!([
+        {
+            "name": "screen_capture",
+            "description": "Capture the guest display as a PNG screenshot (full screen or a region).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "region": {
+                        "type": "object",
+                        "description": "Optional sub-region to capture",
+                        "properties": {
+                            "x": { "type": "integer" },
+                            "y": { "type": "integer" },
+                            "width": { "type": "integer" },
+                            "height": { "type": "integer" }
+                        },
+                        "required": ["x", "y", "width", "height"]
+                    },
+                    "scale": { "type": "number", "description": "Scale factor for the capture" }
+                }
+            }
+        },
+        {
+            "name": "mouse_move",
+            "description": "Move the cursor to an absolute position.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "x": { "type": "integer" },
+                    "y": { "type": "integer" }
+                },
+                "required": ["x", "y"]
+            }
+        },
+        {
+            "name": "mouse_click",
+            "description": "Click a mouse button at the current position.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "button": { "type": "string", "enum": ["left", "right", "middle"], "default": "left" }
+                },
+                "required": ["button"]
+            }
+        },
+        {
+            "name": "keyboard_type",
+            "description": "Type a string of text.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "text": { "type": "string" }
+                },
+                "required": ["text"]
+            }
+        },
+        {
+            "name": "keyboard_key",
+            "description": "Press a key with optional modifiers (shift, ctrl, alt, super).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "key": { "type": "string" },
+                    "modifiers": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["key"]
+            }
+        },
+        {
+            "name": "window_list",
+            "description": "List all open windows with their id, title, position, size, and focus state.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "window_focus",
+            "description": "Focus and raise a window by its id.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "id": { "type": "integer" } },
+                "required": ["id"]
+            }
+        },
+        {
+            "name": "window_resize",
+            "description": "Resize a window by its id.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "integer" },
+                    "width": { "type": "integer" },
+                    "height": { "type": "integer" }
+                },
+                "required": ["id", "width", "height"]
+            }
+        },
+        {
+            "name": "window_move",
+            "description": "Move a window to a new position.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "integer" },
+                    "x": { "type": "integer" },
+                    "y": { "type": "integer" }
+                },
+                "required": ["id", "x", "y"]
+            }
+        },
+        {
+            "name": "window_open",
+            "description": "Launch a program in the guest.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "cmd": { "type": "string" } },
+                "required": ["cmd"]
+            }
+        },
+        {
+            "name": "window_close",
+            "description": "Close a window by its id.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "id": { "type": "integer" } },
+                "required": ["id"]
+            }
+        },
+        {
+            "name": "window_minimize",
+            "description": "Minimize a window by its id.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "id": { "type": "integer" } },
+                "required": ["id"]
+            }
+        },
+        {
+            "name": "shell_exec",
+            "description": "Execute a shell command in the guest and return its output.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "cmd": { "type": "string" } },
+                "required": ["cmd"]
+            }
+        },
+        {
+            "name": "file_read",
+            "description": "Read a file from the guest filesystem.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string" },
+                    "line": { "type": "integer", "description": "Optional line number to jump to in editor" }
+                },
+                "required": ["path"]
+            }
+        },
+        {
+            "name": "file_write",
+            "description": "Write data to a file on the guest filesystem.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string" },
+                    "data": { "type": "array", "items": { "type": "integer" } },
+                    "offset": { "type": "integer" }
+                },
+                "required": ["path", "data"]
+            }
+        },
+        {
+            "name": "fs_mount",
+            "description": "Mount a host directory into the guest via FUSE-over-vsock.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "host_path": { "type": "string" },
+                    "guest_path": { "type": "string" }
+                },
+                "required": ["host_path", "guest_path"]
+            }
+        },
+        {
+            "name": "fs_unmount",
+            "description": "Unmount a FUSE-mounted guest path.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "guest_path": { "type": "string" } },
+                "required": ["guest_path"]
+            }
+        }
+    ])
+    .as_array()
+    .unwrap()
+    .clone()
+}
+
+pub fn toolcall_from_mcp(name: &str, args: &serde_json::Value) -> Result<ToolCall, String> {
+    let mut obj = serde_json::Map::new();
+    obj.insert("tool".into(), serde_json::Value::String(name.into()));
+    let has_fields = args.as_object().map(|m| !m.is_empty()).unwrap_or(false);
+    if has_fields {
+        obj.insert("params".into(), args.clone());
+    }
+    serde_json::from_value(serde_json::Value::Object(obj))
+        .map_err(|e| format!("invalid tool call: {e}"))
+}

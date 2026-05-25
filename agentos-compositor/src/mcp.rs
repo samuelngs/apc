@@ -176,10 +176,13 @@ fn handle_connection(fd: OwnedFd, cmd_tx: channel::Sender<McpCommand>) -> Result
 
         tracing::info!(method = %request.method, "MCP request");
         let response = handle_request(&request, &cmd_tx);
-        let mut resp = serde_json::to_vec(&response)?;
-        resp.push(b'\n');
-        writer.write_all(&resp)?;
-        writer.flush()?;
+
+        if let Some(resp) = response {
+            let mut buf = serde_json::to_vec(&resp)?;
+            buf.push(b'\n');
+            writer.write_all(&buf)?;
+            writer.flush()?;
+        }
     }
 
     Ok(())
@@ -189,18 +192,95 @@ fn handle_connection(fd: OwnedFd, cmd_tx: channel::Sender<McpCommand>) -> Result
 fn handle_request(
     request: &JsonRpcRequest,
     cmd_tx: &channel::Sender<McpCommand>,
-) -> JsonRpcResponse {
-    let tool: Result<ToolCall, _> = serde_json::from_value(
-        request.params.clone().unwrap_or(serde_json::Value::Null),
-    );
+) -> Option<JsonRpcResponse> {
+    match request.method.as_str() {
+        "initialize" => {
+            Some(JsonRpcResponse::success(
+                request.id.clone(),
+                serde_json::json!({
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {
+                        "tools": {}
+                    },
+                    "serverInfo": {
+                        "name": "agentos",
+                        "version": env!("CARGO_PKG_VERSION")
+                    }
+                }),
+            ))
+        }
 
-    match tool {
-        Ok(call) => dispatch_tool(request.id.clone(), call, cmd_tx),
-        Err(e) => JsonRpcResponse::error(
-            request.id.clone(),
-            -32602,
-            format!("invalid params: {e}"),
-        ),
+        "notifications/initialized" => None,
+
+        "tools/list" => {
+            Some(JsonRpcResponse::success(
+                request.id.clone(),
+                serde_json::json!({
+                    "tools": agentos_protocol::mcp_tool_schemas()
+                }),
+            ))
+        }
+
+        "tools/call" => {
+            let params = request.params.clone().unwrap_or(serde_json::Value::Null);
+            let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let arguments = params.get("arguments").cloned().unwrap_or(serde_json::json!({}));
+
+            match agentos_protocol::toolcall_from_mcp(name, &arguments) {
+                Ok(call) => {
+                    let rpc = dispatch_tool(request.id.clone(), call, cmd_tx);
+                    Some(toolcall_result_to_mcp(rpc))
+                }
+                Err(e) => Some(JsonRpcResponse::error(
+                    request.id.clone(),
+                    -32602,
+                    e,
+                )),
+            }
+        }
+
+        _ => {
+            let tool: Result<ToolCall, _> = serde_json::from_value(
+                request.params.clone().unwrap_or(serde_json::Value::Null),
+            );
+            match tool {
+                Ok(call) => Some(dispatch_tool(request.id.clone(), call, cmd_tx)),
+                Err(e) => Some(JsonRpcResponse::error(
+                    request.id.clone(),
+                    -32602,
+                    format!("invalid params: {e}"),
+                )),
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn toolcall_result_to_mcp(rpc: JsonRpcResponse) -> JsonRpcResponse {
+    if let Some(err) = &rpc.error {
+        JsonRpcResponse::success(
+            rpc.id,
+            serde_json::json!({
+                "content": [{ "type": "text", "text": err.message }],
+                "isError": true
+            }),
+        )
+    } else {
+        let result = rpc.result.unwrap_or(serde_json::Value::Null);
+        let content = if let Some(data) = result.get("data") {
+            if let Some(b64) = data.as_str() {
+                let format = result.get("format").and_then(|f| f.as_str()).unwrap_or("png");
+                serde_json::json!([{ "type": "image", "data": b64, "mimeType": format!("image/{format}") }])
+            } else {
+                serde_json::json!([{ "type": "text", "text": serde_json::to_string(&result).unwrap_or_default() }])
+            }
+        } else {
+            serde_json::json!([{ "type": "text", "text": serde_json::to_string(&result).unwrap_or_default() }])
+        };
+        JsonRpcResponse::success(
+            rpc.id,
+            serde_json::json!({ "content": content }),
+        )
     }
 }
 
