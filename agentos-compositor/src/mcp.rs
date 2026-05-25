@@ -42,8 +42,10 @@ pub fn start(
     loop_handle
         .insert_source(cmd_rx, |event, _, data| {
             if let channel::Event::Msg(cmd) = event {
-                let result = super::mcp_dispatch::handle_mcp_tool(&mut data.state, &mut data.display, cmd.tool);
-                let _ = cmd.reply.send(result);
+                let result = super::mcp_dispatch::handle_mcp_tool(&mut data.state, &mut data.display, cmd.tool, cmd.reply.clone());
+                if let Some(value) = result {
+                    let _ = cmd.reply.send(value);
+                }
             }
         })
         .map_err(|e| anyhow::anyhow!("mcp channel source: {}", e.error))?;
@@ -208,50 +210,20 @@ fn dispatch_tool(
     tool: ToolCall,
     cmd_tx: &channel::Sender<McpCommand>,
 ) -> JsonRpcResponse {
-    match &tool {
-        ToolCall::ShellExec { cmd } => {
-            match std::process::Command::new("sh").args(["-c", cmd.as_str()]).output() {
-                Ok(output) => JsonRpcResponse::success(
-                    id,
-                    serde_json::json!({
-                        "exit_code": output.status.code(),
-                        "stdout": String::from_utf8_lossy(&output.stdout),
-                        "stderr": String::from_utf8_lossy(&output.stderr),
-                    }),
-                ),
-                Err(e) => JsonRpcResponse::error(id, -32000, format!("exec failed: {e}")),
-            }
-        }
-        ToolCall::FileRead { path } => match std::fs::read_to_string(path) {
-            Ok(data) => JsonRpcResponse::success(
-                id,
-                serde_json::json!({
-                    "data": data,
-                    "size": data.len(),
-                }),
-            ),
-            Err(e) => JsonRpcResponse::error(id, -32000, format!("read failed: {e}")),
-        },
-        ToolCall::FileWrite { path, data } => match std::fs::write(path, data) {
-            Ok(()) => {
-                JsonRpcResponse::success(id, serde_json::json!({"written": data.len()}))
-            }
-            Err(e) => JsonRpcResponse::error(id, -32000, format!("write failed: {e}")),
-        },
-
-        _ => {
-            let (reply_tx, reply_rx) = mpsc::sync_channel(1);
-            let cmd = McpCommand {
-                tool,
-                reply: reply_tx,
-            };
-            if cmd_tx.send(cmd).is_err() {
-                return JsonRpcResponse::error(id, -32000, "compositor channel closed");
-            }
-            match reply_rx.recv_timeout(std::time::Duration::from_secs(5)) {
-                Ok(result) => JsonRpcResponse::success(id, result),
-                Err(_) => JsonRpcResponse::error(id, -32000, "compositor timeout"),
-            }
-        }
+    let timeout = match &tool {
+        ToolCall::ShellExec { .. } => std::time::Duration::from_secs(300),
+        _ => std::time::Duration::from_secs(5),
+    };
+    let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+    let cmd = McpCommand {
+        tool,
+        reply: reply_tx,
+    };
+    if cmd_tx.send(cmd).is_err() {
+        return JsonRpcResponse::error(id, -32000, "compositor channel closed");
+    }
+    match reply_rx.recv_timeout(timeout) {
+        Ok(result) => JsonRpcResponse::success(id, result),
+        Err(_) => JsonRpcResponse::error(id, -32000, "compositor timeout"),
     }
 }

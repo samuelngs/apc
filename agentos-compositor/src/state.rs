@@ -150,6 +150,8 @@ pub(crate) struct AgentCompositor {
 
     pub(crate) wayland_display: String,
     pub(crate) mcp_tx: calloop::channel::Sender<crate::mcp::McpCommand>,
+    pub(crate) editor_pid: Option<u32>,
+    pub(crate) mcp_pids: Vec<u32>,
 }
 
 #[cfg(target_os = "linux")]
@@ -192,6 +194,73 @@ impl AgentCompositor {
             (-parent_global.x, -parent_global.y).into(),
             (logical_w, logical_h).into(),
         )
+    }
+
+    fn pick_window_position(
+        &self,
+        win_w: i32,
+        win_h: i32,
+        usable_w: i32,
+        usable_h: i32,
+    ) -> (i32, i32) {
+        let margin = 48;
+        let max_x = (usable_w - win_w - margin).max(margin);
+        let max_y = (usable_h - win_h - margin).max(margin);
+
+        let existing: Vec<Rectangle<i32, Logical>> = self
+            .space
+            .elements()
+            .filter_map(|w| {
+                let loc = self.space.element_location(w)?;
+                let size = w.toplevel()?.current_state().size?;
+                Some(Rectangle::from_loc_and_size(loc, size))
+            })
+            .collect();
+
+        if existing.is_empty() {
+            return ((usable_w - win_w) / 2, (usable_h - win_h) / 2);
+        }
+
+        let seed = self.start_time.elapsed().as_micros() as u64;
+        let range_x = (max_x - margin + 1).max(1) as u64;
+        let range_y = (max_y - margin + 1).max(1) as u64;
+
+        let candidate_rect = |x: i32, y: i32| -> Rectangle<i32, Logical> {
+            Rectangle::from_loc_and_size((x, y), (win_w, win_h))
+        };
+
+        let overlap = |x: i32, y: i32| -> i64 {
+            let r = candidate_rect(x, y);
+            existing
+                .iter()
+                .map(|e| {
+                    e.intersection(r)
+                        .map(|i| i.size.w as i64 * i.size.h as i64)
+                        .unwrap_or(0)
+                })
+                .sum()
+        };
+
+        let mut best = ((usable_w - win_w) / 2, (usable_h - win_h) / 2);
+        let mut best_score = overlap(best.0, best.1);
+
+        for i in 0u64..16 {
+            let h = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(i.wrapping_mul(1442695040888963407));
+            let x = margin + ((h >> 16) % range_x) as i32;
+            let y = margin + ((h >> 32) % range_y) as i32;
+            let score = overlap(x, y);
+            if score < best_score {
+                best_score = score;
+                best = (x, y);
+                if score == 0 {
+                    break;
+                }
+            }
+        }
+
+        best
     }
 }
 
@@ -238,13 +307,20 @@ impl XdgShellHandler for AgentCompositor {
         let output_size = self.output.current_mode().map(|m| m.size).unwrap_or((1920, 1080).into());
         let logical_w = output_size.w as i32 / s;
         let logical_h = output_size.h as i32 / s;
-        let usable: Size<i32, Logical> = (logical_w, logical_h - taskbar_height(1)).into();
+        let taskbar_h = taskbar_height(1);
+        let usable_w = logical_w;
+        let usable_h = logical_h - taskbar_h;
+
+        let win_w = (usable_w * 2 / 3).min(960);
+        let win_h = (usable_h * 2 / 3).min(720);
+        let (x, y) = self.pick_window_position(win_w, win_h, usable_w, usable_h);
+
         surface.with_pending_state(|s| {
-            s.size = Some(usable);
+            s.size = Some((win_w, win_h).into());
         });
         surface.send_configure();
         let window = Window::new_wayland_window(surface);
-        self.space.map_element(window.clone(), (0, 0), false);
+        self.space.map_element(window.clone(), (x, y), false);
         self.window_order.push(window);
         tracing::info!("new toplevel window mapped");
     }
@@ -763,6 +839,8 @@ pub fn run() -> Result<()> {
         scale_factor,
         wayland_display: socket_name.clone(),
         mcp_tx,
+        editor_pid: None,
+        mcp_pids: Vec::new(),
     };
 
     let wayland_display = socket_name.clone();
@@ -789,15 +867,7 @@ pub fn run() -> Result<()> {
                 Err(e) => tracing::warn!(cmd, %e, "terminal not available"),
             }
         }
-        tracing::info!("attempting to launch chromium");
-        match std::process::Command::new("chromium")
-            .envs(env_vars.iter().cloned())
-            .spawn()
-        {
-            Ok(_) => tracing::info!("chromium launched"),
-            Err(e) => tracing::warn!(%e, "chromium not available"),
-        }
-        tracing::error!("no terminal emulator found");
+        tracing::info!("startup apps launched");
     });
 
     let mut calloop_data = CalloopData { display, state };

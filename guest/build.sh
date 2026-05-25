@@ -66,6 +66,7 @@ apk add --root /rootfs --initdb --no-cache \
     xwayland \
     wlr-randr \
     foot \
+    neovim \
     bash \
     curl \
     iputils \

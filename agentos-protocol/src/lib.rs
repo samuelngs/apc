@@ -90,9 +90,18 @@ pub enum ToolCall {
     #[serde(rename = "shell_exec")]
     ShellExec { cmd: String },
     #[serde(rename = "file_read")]
-    FileRead { path: String },
+    FileRead {
+        path: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        line: Option<u32>,
+    },
     #[serde(rename = "file_write")]
-    FileWrite { path: String, data: Vec<u8> },
+    FileWrite {
+        path: String,
+        data: Vec<u8>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        offset: Option<u32>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

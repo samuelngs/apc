@@ -13,6 +13,9 @@ use smithay::{
 use agentos_protocol::{ToolCall, WindowInfo};
 
 #[cfg(target_os = "linux")]
+use std::sync::mpsc;
+
+#[cfg(target_os = "linux")]
 use super::state::AgentCompositor;
 
 #[cfg(target_os = "linux")]
@@ -31,6 +34,97 @@ use super::taskbar::get_window_title;
 pub(crate) fn handle_mcp_tool(
     state: &mut AgentCompositor,
     _display: &mut Display<AgentCompositor>,
+    tool: ToolCall,
+    reply_tx: mpsc::SyncSender<serde_json::Value>,
+) -> Option<serde_json::Value> {
+    match tool {
+        ToolCall::ShellExec { ref cmd } => {
+            let id = state.start_time.elapsed().as_millis();
+            let out_path = format!("/tmp/mcp-out-{id}");
+            let wayland_display = state.wayland_display.clone();
+            let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR")
+                .unwrap_or_else(|_| format!("/run/user/{}", unsafe { libc::getuid() }));
+
+            let shell_cmd = format!(
+                "{{ {cmd}; }} 2>&1 | tee {out_path}; echo $? > {out_path}.exit; sleep 2"
+            );
+            let title = if cmd.len() > 60 {
+                format!("$ {}...", &cmd[..57])
+            } else {
+                format!("$ {cmd}")
+            };
+
+            let result = std::process::Command::new("foot")
+                .args(["-T", &title, "-e", "sh", "-c", &shell_cmd])
+                .env("WAYLAND_DISPLAY", &wayland_display)
+                .env("XDG_RUNTIME_DIR", &xdg_runtime_dir)
+                .env("TERM", "xterm-256color")
+                .spawn();
+
+            match result {
+                Ok(mut child) => {
+                    let pid = child.id();
+                    state.mcp_pids.push(pid);
+                    let out_path_clone = out_path.clone();
+                    std::thread::spawn(move || {
+                        let _ = child.wait();
+                        let stdout = std::fs::read_to_string(&out_path_clone).unwrap_or_default();
+                        let exit_file = format!("{out_path_clone}.exit");
+                        let exit_code: i32 = std::fs::read_to_string(&exit_file)
+                            .ok()
+                            .and_then(|s| s.trim().parse().ok())
+                            .unwrap_or(-1);
+                        let _ = std::fs::remove_file(&out_path_clone);
+                        let _ = std::fs::remove_file(&exit_file);
+                        let _ = reply_tx.send(serde_json::json!({
+                            "exit_code": exit_code,
+                            "stdout": stdout,
+                            "stderr": "",
+                        }));
+                    });
+                    return None;
+                }
+                Err(e) => {
+                    Some(serde_json::json!({ "error": format!("foot launch failed: {e}") }))
+                }
+            }
+        }
+
+        ToolCall::FileRead { ref path, line } => {
+            let data = match std::fs::read_to_string(path) {
+                Ok(d) => d,
+                Err(e) => {
+                    return Some(serde_json::json!({ "error": format!("read failed: {e}") }));
+                }
+            };
+            let size = data.len();
+
+            open_in_editor(state, path, line);
+
+            Some(serde_json::json!({
+                "data": data,
+                "size": size,
+            }))
+        }
+
+        ToolCall::FileWrite { ref path, ref data, offset } => {
+            if let Err(e) = std::fs::write(path, data) {
+                return Some(serde_json::json!({ "error": format!("write failed: {e}") }));
+            }
+            let written = data.len();
+
+            open_in_editor(state, path, offset);
+
+            Some(serde_json::json!({ "written": written }))
+        }
+
+        other => Some(handle_sync_tool(state, other)),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn handle_sync_tool(
+    state: &mut AgentCompositor,
     tool: ToolCall,
 ) -> serde_json::Value {
     match tool {
@@ -106,11 +200,7 @@ pub(crate) fn handle_mcp_tool(
             }
         }
 
-        ToolCall::WindowResize {
-            id,
-            width,
-            height,
-        } => {
+        ToolCall::WindowResize { id, width, height } => {
             let windows: Vec<Window> = state.space.elements().cloned().collect();
             if let Some(window) = windows.get(id as usize) {
                 if let Some(toplevel) = window.toplevel() {
@@ -307,10 +397,7 @@ pub(crate) fn handle_mcp_tool(
             }
         }
 
-        ToolCall::KeyboardKey {
-            ref key,
-            ref modifiers,
-        } => {
+        ToolCall::KeyboardKey { ref key, ref modifiers } => {
             if let Some(keyboard) = state.seat.get_keyboard() {
                 let time = state.start_time.elapsed().as_millis() as u32;
                 let mod_codes: Vec<u32> = modifiers.iter().filter_map(|m| modifier_to_evdev(m)).collect();
@@ -371,8 +458,58 @@ pub(crate) fn handle_mcp_tool(
             }
         }
 
-        ToolCall::ShellExec { .. } | ToolCall::FileRead { .. } | ToolCall::FileWrite { .. } => {
-            serde_json::json!({ "error": "routed to wrong handler" })
+        _ => serde_json::json!({ "error": "unhandled tool" }),
+    }
+}
+
+#[cfg(target_os = "linux")]
+const NVIM_SOCKET: &str = "/tmp/nvim-mcp.sock";
+
+#[cfg(target_os = "linux")]
+fn open_in_editor(state: &mut AgentCompositor, path: &str, line: Option<u32>) {
+    let wayland_display = state.wayland_display.clone();
+    let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR")
+        .unwrap_or_else(|_| format!("/run/user/{}", unsafe { libc::getuid() }));
+
+    let nvim_running = std::path::Path::new(NVIM_SOCKET).exists();
+
+    if nvim_running {
+        let goto = line.unwrap_or(1);
+        let nvim_cmd = format!(
+            "nvim --server {} --remote-send '<Esc>:e {}<CR>:{}<CR>'",
+            NVIM_SOCKET, path, goto
+        );
+        let _ = std::process::Command::new("sh")
+            .args(["-c", &nvim_cmd])
+            .env("WAYLAND_DISPLAY", &wayland_display)
+            .env("XDG_RUNTIME_DIR", &xdg_runtime_dir)
+            .spawn();
+    } else {
+        let goto_arg = line.map(|l| format!("+{l}")).unwrap_or_default();
+        let mut args = vec![
+            "-T".to_string(), format!("nvim - {path}"),
+            "-e".to_string(), "nvim".to_string(),
+            "--listen".to_string(), NVIM_SOCKET.to_string(),
+        ];
+        if !goto_arg.is_empty() {
+            args.push(goto_arg);
+        }
+        args.push(path.to_string());
+
+        match std::process::Command::new("foot")
+            .args(&args)
+            .env("WAYLAND_DISPLAY", &wayland_display)
+            .env("XDG_RUNTIME_DIR", &xdg_runtime_dir)
+            .env("TERM", "xterm-256color")
+            .spawn()
+        {
+            Ok(child) => {
+                state.editor_pid = Some(child.id());
+                state.mcp_pids.push(child.id());
+            }
+            Err(e) => {
+                tracing::error!(%e, "failed to launch nvim");
+            }
         }
     }
 }
