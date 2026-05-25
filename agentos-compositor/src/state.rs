@@ -22,6 +22,7 @@ use smithay::{
     },
     desktop::{
         PopupManager, PopupKind, PopupKeyboardGrab, PopupPointerGrab,
+        find_popup_root_surface, get_popup_toplevel_coords,
         space::Space, Window,
     },
     input::{
@@ -39,7 +40,7 @@ use smithay::{
             Client, Display,
         },
     },
-    utils::{DeviceFd, Logical, Point, Serial, Size, Transform},
+    utils::{DeviceFd, Logical, Point, Rectangle, Serial, Size, Transform},
     wayland::{
         buffer::BufferHandler,
         compositor::{self, get_parent, is_sync_subsurface, CompositorClientState, CompositorHandler, CompositorState},
@@ -155,6 +156,43 @@ pub(crate) struct AgentCompositor {
 pub(crate) struct CalloopData {
     pub(crate) display: Display<AgentCompositor>,
     pub(crate) state: AgentCompositor,
+}
+
+#[cfg(target_os = "linux")]
+impl AgentCompositor {
+    fn popup_target_rect(&self, surface: &PopupSurface) -> Rectangle<i32, Logical> {
+        let output_size = self.output.current_mode().map(|m| m.size).unwrap_or((1920, 1080).into());
+        let s = self.scale_factor;
+        let logical_w = output_size.w / s;
+        let logical_h = output_size.h / s;
+
+        let kind = PopupKind::Xdg(surface.clone());
+        let popup_offset = get_popup_toplevel_coords(&kind);
+
+        let toplevel_loc = find_popup_root_surface(&kind)
+            .ok()
+            .and_then(|root| {
+                self.space.elements().find_map(|w| {
+                    let is_root = w.toplevel().map(|t| t.wl_surface() == &root).unwrap_or(false);
+                    if is_root {
+                        self.space.element_location(w)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .unwrap_or_default();
+
+        let parent_global: Point<i32, Logical> = (
+            toplevel_loc.x + popup_offset.x,
+            toplevel_loc.y + popup_offset.y,
+        ).into();
+
+        Rectangle::new(
+            (-parent_global.x, -parent_global.y).into(),
+            (logical_w, logical_h).into(),
+        )
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -333,7 +371,13 @@ impl XdgShellHandler for AgentCompositor {
         }
     }
 
-    fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {
+    fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {
+        let target = self.popup_target_rect(&surface);
+        let geometry = positioner.get_unconstrained_geometry(target);
+        surface.with_pending_state(|state| {
+            state.geometry = geometry;
+            state.positioner = positioner;
+        });
         let _ = surface.send_configure();
         let _ = self.popup_manager.track_popup(PopupKind::Xdg(surface));
     }
@@ -357,10 +401,17 @@ impl XdgShellHandler for AgentCompositor {
 
     fn reposition_request(
         &mut self,
-        _surface: PopupSurface,
-        _positioner: PositionerState,
-        _token: u32,
+        surface: PopupSurface,
+        positioner: PositionerState,
+        token: u32,
     ) {
+        let target = self.popup_target_rect(&surface);
+        let geometry = positioner.get_unconstrained_geometry(target);
+        surface.with_pending_state(|state| {
+            state.geometry = geometry;
+            state.positioner = positioner;
+        });
+        let _ = surface.send_repositioned(token);
     }
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
