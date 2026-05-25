@@ -1,9 +1,11 @@
 mod app;
 mod display;
 pub mod fs_server;
+pub mod headless;
 pub mod input;
 mod krun_ffi;
 pub mod mcp;
+pub mod mcp_stdio;
 pub mod slirp;
 mod vm;
 
@@ -60,6 +62,14 @@ pub struct Cli {
     /// Allowlist of host paths that can be mounted into guest (comma-separated, default: *)
     #[arg(long, default_value = "*")]
     allow_mount: String,
+
+    /// Run without GUI window (framebuffer in memory only)
+    #[arg(long)]
+    headless: bool,
+
+    /// Expose MCP over stdin/stdout (implies --headless)
+    #[arg(long)]
+    mcp_stdio: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -74,6 +84,8 @@ fn main() -> anyhow::Result<()> {
         .filter(|s| !s.is_empty())
         .collect();
 
+    let headless = cli.headless || cli.mcp_stdio;
+
     let config = vm::VmConfig {
         kernel: cli.kernel,
         initrd: cli.initrd,
@@ -87,10 +99,16 @@ fn main() -> anyhow::Result<()> {
         shared_dir: cli.share,
         mcp_test: cli.mcp_test,
         allow_mount,
+        headless,
+        mcp_stdio: cli.mcp_stdio,
     };
 
     #[cfg(target_os = "macos")]
-    app::run(config)?;
+    if headless {
+        headless::run(config)?;
+    } else {
+        app::run(config)?;
+    }
 
     #[cfg(not(target_os = "macos"))]
     anyhow::bail!("AgentOS host requires macOS with Hypervisor.framework");

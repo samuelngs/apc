@@ -347,14 +347,6 @@ pub(crate) fn capture_screen(state: &mut AgentCompositor) -> Result<(u32, u32, S
 
     let phys_size: Size<i32, Physical> = (w, h).into();
 
-    let space_elements: Vec<SpaceRenderElements<GlesRenderer, _>> = space_render_elements(
-        &mut state.renderer,
-        [&state.space],
-        &state.output,
-        1.0,
-    )
-    .unwrap_or_default();
-
     let pointer_loc = state.pointer.current_location();
     let mut elements: Vec<OutputRenderElements<GlesRenderer, _>> = Vec::new();
 
@@ -378,6 +370,36 @@ pub(crate) fn capture_screen(state: &mut AgentCompositor) -> Result<(u32, u32, S
     let output_h = h;
     let tb_h = taskbar_height(state.scale_factor);
     let taskbar_y = (output_h - tb_h) as f64;
+
+    let s = state.scale_factor;
+    let btn_w = taskbar_btn_width(s);
+    let btn_gap = taskbar_btn_gap(s);
+    let btn_margin = taskbar_btn_margin(s);
+    let btn_h = taskbar_btn_height(s);
+    let focused_surface = state.seat.get_keyboard().and_then(|kb| kb.current_focus());
+    let font_size = 13.0 * s as f32;
+    let text_pad = 8 * s;
+    let mut btn_idx = 0usize;
+    let all_windows: Vec<Window> = state.space.elements().cloned().collect();
+    for window in &all_windows {
+        let title = get_window_title(window);
+        let label = if title.is_empty() { "Window".to_string() } else { title };
+        let is_focused = window
+            .toplevel()
+            .map(|t| focused_surface.as_ref() == Some(t.wl_surface()))
+            .unwrap_or(false);
+        let (r, g, b) = if is_focused { (80, 80, 120) } else { (50, 50, 50) };
+        let btn_buf = create_label_buffer(btn_w, btn_h, r, g, b, &label, font_size, text_pad, s);
+        let x = (btn_margin + btn_idx as i32 * (btn_w + btn_gap)) as f64;
+        let y = taskbar_y + ((tb_h - btn_h) / 2) as f64;
+        if let Ok(btn) = MemoryRenderBufferRenderElement::from_buffer(
+            &mut state.renderer, (x, y), &btn_buf, None, None, None, Kind::Unspecified,
+        ) {
+            elements.push(OutputRenderElements::Cursor(btn));
+        }
+        btn_idx += 1;
+    }
+
     if let Ok(bg) = MemoryRenderBufferRenderElement::from_buffer(
         &mut state.renderer,
         (0.0, taskbar_y),
@@ -390,20 +412,33 @@ pub(crate) fn capture_screen(state: &mut AgentCompositor) -> Result<(u32, u32, S
         elements.push(OutputRenderElements::Cursor(bg));
     }
 
-    let btn_w = taskbar_btn_width(state.scale_factor);
-    let btn_gap = taskbar_btn_gap(state.scale_factor);
-    let btn_margin = taskbar_btn_margin(state.scale_factor);
-    let btn_h = taskbar_btn_height(state.scale_factor);
-    for (i, (_, _, _, btn_buf)) in state.taskbar_buttons.iter().enumerate() {
-        let x = (btn_margin + i as i32 * (btn_w + btn_gap)) as f64;
-        let y = taskbar_y + ((tb_h - btn_h) / 2) as f64;
-        if let Ok(btn) = MemoryRenderBufferRenderElement::from_buffer(
-            &mut state.renderer, (x, y), btn_buf, None, None, None, Kind::Unspecified,
-        ) {
-            elements.push(OutputRenderElements::Cursor(btn));
+    let output_scale = state.output.current_scale().fractional_scale();
+    let windows: Vec<Window> = state.space.elements().rev().cloned().collect();
+    for window in &windows {
+        if state.is_ssd(window) {
+            if let Some(loc) = state.space.element_location(window) {
+                let win_w = window.geometry().size.w;
+                let title = get_window_title(window);
+                let label = if title.is_empty() { "Window".to_string() } else { title };
+                let bar_w = win_w * s;
+                let bar_h = SSD_TITLE_BAR_HEIGHT * s;
+                let bar_buf = create_label_buffer(bar_w, bar_h, 50, 50, 60, &label, 12.0 * s as f32, 8 * s, s);
+                let bar_x = loc.x as f64 * sf;
+                let bar_y = (loc.y - SSD_TITLE_BAR_HEIGHT) as f64 * sf;
+                if let Ok(bar_elem) = MemoryRenderBufferRenderElement::from_buffer(
+                    &mut state.renderer, (bar_x, bar_y), &bar_buf, None, None, None, Kind::Unspecified,
+                ) {
+                    elements.push(OutputRenderElements::Cursor(bar_elem));
+                }
+            }
         }
+
+        let loc = state.space.element_location(window).unwrap_or_default();
+        let physical_loc = loc.to_physical_precise_round(output_scale);
+        let win_elems: Vec<SpaceRenderElements<GlesRenderer, WaylandSurfaceRenderElement<GlesRenderer>>> =
+            window.render_elements(&mut state.renderer, physical_loc, Scale::from(output_scale), 1.0);
+        elements.extend(win_elems.into_iter().map(OutputRenderElements::Space));
     }
-    elements.extend(space_elements.into_iter().map(OutputRenderElements::Space));
 
     let mut damage_tracker = OutputDamageTracker::new(phys_size, Scale::from(1.0), Transform::Normal);
     {

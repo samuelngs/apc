@@ -14,6 +14,8 @@ pub struct VmConfig {
     pub shared_dir: Option<PathBuf>,
     pub mcp_test: bool,
     pub allow_mount: Vec<String>,
+    pub headless: bool,
+    pub mcp_stdio: bool,
 }
 
 #[cfg(target_os = "macos")]
@@ -98,7 +100,11 @@ pub mod krun {
                 )?;
                 tracing::info!(display_id, phys_w, phys_h, scale = config.display_scale, "display added");
 
-                let backend = Box::new(display::create_backend());
+                let backend = if config.headless {
+                    Box::new(crate::headless::create_headless_backend())
+                } else {
+                    Box::new(display::create_backend())
+                };
                 let backend_ptr = &*backend as *const KrunDisplayBackend as *const std::ffi::c_void;
                 check(
                     krun_set_display_backend(
