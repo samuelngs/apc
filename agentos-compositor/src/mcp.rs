@@ -9,6 +9,8 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 #[cfg(target_os = "linux")]
 use std::sync::mpsc;
+#[cfg(target_os = "linux")]
+use std::time::Duration;
 
 #[cfg(target_os = "linux")]
 use calloop::channel;
@@ -42,7 +44,12 @@ pub fn start(
     loop_handle
         .insert_source(cmd_rx, |event, _, data| {
             if let channel::Event::Msg(cmd) = event {
-                let result = super::mcp_dispatch::handle_mcp_tool(&mut data.state, &mut data.display, cmd.tool, cmd.reply.clone());
+                let result = super::mcp_dispatch::handle_mcp_tool(
+                    &mut data.state,
+                    &mut data.display,
+                    cmd.tool,
+                    cmd.reply.clone(),
+                );
                 if let Some(value) = result {
                     let _ = cmd.reply.send(value);
                 }
@@ -150,6 +157,9 @@ fn handle_connection(fd: OwnedFd, cmd_tx: channel::Sender<McpCommand>) -> Result
     let raw = fd.as_raw_fd();
     std::mem::forget(fd);
     let stream = unsafe { std::net::TcpStream::from_raw_fd(raw) };
+    if let Err(e) = stream.set_write_timeout(Some(Duration::from_secs(5))) {
+        tracing::warn!(%e, "failed to set MCP connection write timeout");
+    }
     let reader = BufReader::new(stream.try_clone()?);
     let mut writer = stream;
 
@@ -194,55 +204,49 @@ fn handle_request(
     cmd_tx: &channel::Sender<McpCommand>,
 ) -> Option<JsonRpcResponse> {
     match request.method.as_str() {
-        "initialize" => {
-            Some(JsonRpcResponse::success(
-                request.id.clone(),
-                serde_json::json!({
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {
-                        "tools": {}
-                    },
-                    "serverInfo": {
-                        "name": "agentos",
-                        "version": env!("CARGO_PKG_VERSION")
-                    }
-                }),
-            ))
-        }
+        "initialize" => Some(JsonRpcResponse::success(
+            request.id.clone(),
+            serde_json::json!({
+                "protocolVersion": "2024-11-05",
+                "capabilities": {
+                    "tools": {}
+                },
+                "serverInfo": {
+                    "name": "agentos",
+                    "version": env!("CARGO_PKG_VERSION")
+                }
+            }),
+        )),
 
         "notifications/initialized" => None,
 
-        "tools/list" => {
-            Some(JsonRpcResponse::success(
-                request.id.clone(),
-                serde_json::json!({
-                    "tools": agentos_protocol::mcp_tool_schemas()
-                }),
-            ))
-        }
+        "tools/list" => Some(JsonRpcResponse::success(
+            request.id.clone(),
+            serde_json::json!({
+                "tools": agentos_protocol::mcp_tool_schemas()
+            }),
+        )),
 
         "tools/call" => {
             let params = request.params.clone().unwrap_or(serde_json::Value::Null);
             let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            let arguments = params.get("arguments").cloned().unwrap_or(serde_json::json!({}));
+            let arguments = params
+                .get("arguments")
+                .cloned()
+                .unwrap_or(serde_json::json!({}));
 
             match agentos_protocol::toolcall_from_mcp(name, &arguments) {
                 Ok(call) => {
                     let rpc = dispatch_tool(request.id.clone(), call, cmd_tx);
                     Some(toolcall_result_to_mcp(rpc))
                 }
-                Err(e) => Some(JsonRpcResponse::error(
-                    request.id.clone(),
-                    -32602,
-                    e,
-                )),
+                Err(e) => Some(JsonRpcResponse::error(request.id.clone(), -32602, e)),
             }
         }
 
         _ => {
-            let tool: Result<ToolCall, _> = serde_json::from_value(
-                request.params.clone().unwrap_or(serde_json::Value::Null),
-            );
+            let tool: Result<ToolCall, _> =
+                serde_json::from_value(request.params.clone().unwrap_or(serde_json::Value::Null));
             match tool {
                 Ok(call) => Some(dispatch_tool(request.id.clone(), call, cmd_tx)),
                 Err(e) => Some(JsonRpcResponse::error(
@@ -276,10 +280,7 @@ fn toolcall_result_to_mcp(rpc: JsonRpcResponse) -> JsonRpcResponse {
         } else {
             serde_json::json!([{ "type": "text", "text": serde_json::to_string(&result).unwrap_or_default() }])
         };
-        JsonRpcResponse::success(
-            rpc.id,
-            serde_json::json!({ "content": content }),
-        )
+        JsonRpcResponse::success(rpc.id, serde_json::json!({ "content": content }))
     }
 }
 

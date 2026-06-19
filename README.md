@@ -74,7 +74,7 @@ graph TB
 # 3. Build guest FUSE daemon (cross-compiled in Docker for aarch64-linux)
 ./guest/build-fuse.sh
 
-# 4. Build guest disk image (Alpine Linux + compositor + FUSE binary)
+# 4. Build Debian guest disk image (minimal glibc rootfs + compositor + FUSE binary)
 ./guest/build.sh
 
 # 5. Build host binary

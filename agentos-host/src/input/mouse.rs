@@ -1,9 +1,10 @@
 use std::ffi::c_void;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::types::*;
 
-static NAME: &[u8] = b"AgentOS Virtual Tablet";
-static SERIAL: &[u8] = b"agentos-tablet-0";
+static NAME: &[u8] = b"AgentOS Virtual Pointer";
+static SERIAL: &[u8] = b"agentos-pointer-0";
 
 unsafe extern "C" fn config_create(
     instance: *mut *mut c_void,
@@ -14,7 +15,9 @@ unsafe extern "C" fn config_create(
     0
 }
 
-unsafe extern "C" fn config_destroy(_instance: *mut c_void) -> i32 { 0 }
+unsafe extern "C" fn config_destroy(_instance: *mut c_void) -> i32 {
+    0
+}
 
 unsafe extern "C" fn query_device_name(
     _instance: *mut c_void,
@@ -36,10 +39,7 @@ unsafe extern "C" fn query_serial_name(
     n as i32
 }
 
-unsafe extern "C" fn query_device_ids(
-    _instance: *mut c_void,
-    ids: *mut KrunInputDeviceIds,
-) -> i32 {
+unsafe extern "C" fn query_device_ids(_instance: *mut c_void, ids: *mut KrunInputDeviceIds) -> i32 {
     unsafe {
         *ids = KrunInputDeviceIds {
             bustype: BUS_VIRTUAL,
@@ -116,8 +116,8 @@ unsafe extern "C" fn query_properties(
     bitmap: *mut u8,
     bitmap_len: usize,
 ) -> i32 {
-    unsafe { write_bitmap(bitmap, bitmap_len, INPUT_PROP_DIRECT) };
-    (INPUT_PROP_DIRECT / 8 + 1) as i32
+    unsafe { write_bitmap(bitmap, bitmap_len, INPUT_PROP_POINTER) };
+    (INPUT_PROP_POINTER / 8 + 1) as i32
 }
 
 unsafe extern "C" fn event_create(
@@ -130,18 +130,30 @@ unsafe extern "C" fn event_create(
     0
 }
 
-unsafe extern "C" fn event_destroy(_instance: *mut c_void) -> i32 { 0 }
+unsafe extern "C" fn event_destroy(_instance: *mut c_void) -> i32 {
+    0
+}
 
 unsafe extern "C" fn get_ready_efd(_instance: *mut c_void) -> i32 {
     mouse_queue().read_fd()
 }
 
-unsafe extern "C" fn next_event(
-    _instance: *mut c_void,
-    event: *mut KrunInputEvent,
-) -> i32 {
+unsafe extern "C" fn next_event(_instance: *mut c_void, event: *mut KrunInputEvent) -> i32 {
     match mouse_queue().pop() {
         Some(e) => {
+            static MOUSE_EVENTS_DRAINED: AtomicU64 = AtomicU64::new(0);
+            if std::env::var_os("AGENTOS_INPUT_DEBUG").is_some() {
+                let count = MOUSE_EVENTS_DRAINED.fetch_add(1, Ordering::Relaxed) + 1;
+                if count <= 20 || count % 120 == 0 {
+                    tracing::info!(
+                        count,
+                        event_type = e.r#type,
+                        code = e.code,
+                        value = e.value,
+                        "host input: libkrun drained mouse event"
+                    );
+                }
+            }
             unsafe { *event = e };
             1
         }

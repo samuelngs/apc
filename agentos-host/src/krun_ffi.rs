@@ -42,18 +42,43 @@ pub const NET_FEATURE_GUEST_CSUM: u32 = 1 << 1;
 pub const NET_FEATURE_GUEST_TSO4: u32 = 1 << 7;
 pub const NET_FEATURE_HOST_TSO4: u32 = 1 << 11;
 
-pub type krun_display_create_fn =
-    Option<unsafe extern "C" fn(instance: *mut *mut c_void, userdata: *const c_void, reserved: *const c_void) -> i32>;
-pub type krun_display_destroy_fn =
-    Option<unsafe extern "C" fn(instance: *mut c_void) -> i32>;
-pub type krun_display_configure_scanout_fn =
-    Option<unsafe extern "C" fn(instance: *mut c_void, scanout_id: u32, display_width: u32, display_height: u32, width: u32, height: u32, format: u32) -> i32>;
+pub type krun_display_create_fn = Option<
+    unsafe extern "C" fn(
+        instance: *mut *mut c_void,
+        userdata: *const c_void,
+        reserved: *const c_void,
+    ) -> i32,
+>;
+pub type krun_display_destroy_fn = Option<unsafe extern "C" fn(instance: *mut c_void) -> i32>;
+pub type krun_display_configure_scanout_fn = Option<
+    unsafe extern "C" fn(
+        instance: *mut c_void,
+        scanout_id: u32,
+        display_width: u32,
+        display_height: u32,
+        width: u32,
+        height: u32,
+        format: u32,
+    ) -> i32,
+>;
 pub type krun_display_disable_scanout_fn =
     Option<unsafe extern "C" fn(instance: *mut c_void, scanout_id: u32) -> i32>;
-pub type krun_display_alloc_frame_fn =
-    Option<unsafe extern "C" fn(instance: *mut c_void, scanout_id: u32, buffer: *mut *mut u8, buffer_size: *mut usize) -> i32>;
-pub type krun_display_present_frame_fn =
-    Option<unsafe extern "C" fn(instance: *mut c_void, scanout_id: u32, frame_id: u32, damage_area: *const KrunRect) -> i32>;
+pub type krun_display_alloc_frame_fn = Option<
+    unsafe extern "C" fn(
+        instance: *mut c_void,
+        scanout_id: u32,
+        buffer: *mut *mut u8,
+        buffer_size: *mut usize,
+    ) -> i32,
+>;
+pub type krun_display_present_frame_fn = Option<
+    unsafe extern "C" fn(
+        instance: *mut c_void,
+        scanout_id: u32,
+        frame_id: u32,
+        damage_area: *const KrunRect,
+    ) -> i32,
+>;
 
 #[repr(C)]
 pub struct KrunRect {
@@ -105,7 +130,11 @@ unsafe extern "C" {
 
     pub fn krun_set_gpu_options2(ctx_id: u32, virgl_flags: u32, shm_size: u64) -> i32;
     pub fn krun_add_display(ctx_id: u32, width: u32, height: u32) -> i32;
-    pub fn krun_set_display_backend(ctx_id: u32, display_backend: *const c_void, backend_size: usize) -> i32;
+    pub fn krun_set_display_backend(
+        ctx_id: u32,
+        display_backend: *const c_void,
+        backend_size: usize,
+    ) -> i32;
 
     pub fn krun_add_vsock_port2(
         ctx_id: u32,

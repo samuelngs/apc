@@ -1,5 +1,11 @@
-use objc2::{define_class, msg_send, rc::Retained, runtime::NSObject, DefinedClass, MainThreadMarker, MainThreadOnly};
-use objc2_app_kit::{NSApplication, NSApplicationDelegate, NSBackingStoreType, NSWindow, NSWindowStyleMask};
+use objc2::{
+    DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained,
+    runtime::NSObject,
+};
+use objc2_app_kit::{
+    NSApplication, NSApplicationActivationOptions, NSApplicationDelegate, NSBackingStoreType,
+    NSRunningApplication, NSWindow, NSWindowStyleMask,
+};
 use objc2_foundation::{NSNotification, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
 
 use std::cell::OnceCell;
@@ -29,10 +35,7 @@ unsafe extern "C" {
         handler: unsafe extern "C" fn(*mut std::ffi::c_void),
     );
 
-    fn dispatch_set_context(
-        object: *mut std::ffi::c_void,
-        context: *mut std::ffi::c_void,
-    );
+    fn dispatch_set_context(object: *mut std::ffi::c_void, context: *mut std::ffi::c_void);
 
     fn dispatch_resume(object: *mut std::ffi::c_void);
     fn dispatch_walltime(when: *const std::ffi::c_void, delta: i64) -> u64;
@@ -64,11 +67,13 @@ define_class!(
             self.setup_vm_and_viewer();
         }
 
+        #[unsafe(method(applicationDidBecomeActive:))]
+        fn did_become_active(&self, _notification: &NSNotification) {
+            self.focus_viewer_window();
+        }
+
         #[unsafe(method(applicationShouldTerminateAfterLastWindowClosed:))]
-        fn should_terminate_after_last_window_closed(
-            &self,
-            _sender: &NSApplication,
-        ) -> bool {
+        fn should_terminate_after_last_window_closed(&self, _sender: &NSApplication) -> bool {
             true
         }
     }
@@ -91,13 +96,14 @@ impl AppDelegate {
         let mcp_socket_path = format!("/tmp/agentos-mcp-{}.sock", std::process::id());
         let fs_socket_path = format!("/tmp/agentos-fs-{}.sock", std::process::id());
 
-        let (ctx, slirp_fd) = match vm::krun::configure_vm(config, &mcp_socket_path, &fs_socket_path) {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!("failed to configure VM: {e}");
-                std::process::exit(1);
-            }
-        };
+        let (ctx, slirp_fd) =
+            match vm::krun::configure_vm(config, &mcp_socket_path, &fs_socket_path) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!("failed to configure VM: {e}");
+                    std::process::exit(1);
+                }
+            };
 
         if let Err(e) = crate::slirp::start(slirp_fd) {
             tracing::error!("failed to start slirp: {e}");
@@ -108,7 +114,8 @@ impl AppDelegate {
         vm::krun::start_vm(ctx);
         self.start_display_timer();
 
-        let fs_server = crate::fs_server::FsServer::new(&fs_socket_path, config.allow_mount.clone());
+        let fs_server =
+            crate::fs_server::FsServer::new(&fs_socket_path, config.allow_mount.clone());
         fs_server.start();
 
         if config.mcp_test {
@@ -137,15 +144,46 @@ impl AppDelegate {
             )
         };
 
-        let view = FramebufferView::new(mtm, frame);
+        let view_frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(w, h));
+        let view = FramebufferView::new(mtm, view_frame);
         window.setContentView(Some(&view));
         window.setTitle(&NSString::from_str("AgentOS"));
         window.setAcceptsMouseMovedEvents(true);
         window.center();
-        window.makeKeyAndOrderFront(None);
-        window.makeFirstResponder(Some(&view));
 
         let _ = self.ivars().window.set(window);
+        self.activate_application(mtm);
+        self.focus_viewer_window();
+    }
+
+    fn activate_application(&self, mtm: MainThreadMarker) {
+        let activated = NSRunningApplication::currentApplication()
+            .activateWithOptions(NSApplicationActivationOptions::ActivateAllWindows);
+        #[allow(deprecated)]
+        NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true);
+        tracing::info!(activated, "application activation requested");
+    }
+
+    fn focus_viewer_window(&self) {
+        let Some(window) = self.ivars().window.get() else {
+            return;
+        };
+
+        window.orderFrontRegardless();
+        window.makeKeyAndOrderFront(None);
+        window.makeKeyWindow();
+        window.makeMainWindow();
+
+        let accepted_first_responder = window
+            .contentView()
+            .map(|view| window.makeFirstResponder(Some(&view)))
+            .unwrap_or(false);
+
+        tracing::info!(
+            accepted_first_responder,
+            key_window = window.isKeyWindow(),
+            "viewer window focused"
+        );
     }
 
     fn start_display_timer(&self) {

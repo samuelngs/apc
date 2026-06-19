@@ -8,6 +8,9 @@ static FONT: OnceLock<fontdue::Font> = OnceLock::new();
 const FONT_PATHS: &[&str] = &[
     "/usr/share/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf",
     "/usr/share/fonts/jetbrains-mono/JetBrainsMono-Medium.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSans-Medium.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     "/usr/share/fonts/noto/NotoSans-Regular.ttf",
     "/usr/share/fonts/noto/NotoSans-Medium.ttf",
 ];
@@ -22,7 +25,7 @@ fn load_font() -> fontdue::Font {
             }
         }
     }
-    panic!("no suitable font found — install font-noto in the guest rootfs")
+    panic!("no suitable font found; install fonts-noto in the guest rootfs")
 }
 
 #[cfg(target_os = "linux")]
@@ -43,12 +46,14 @@ pub(crate) fn render_text_onto(
     padding_x: i32,
 ) {
     let font = get();
-    let metrics = font.horizontal_line_metrics(font_size).unwrap_or(fontdue::LineMetrics {
-        ascent: font_size * 0.8,
-        descent: font_size * -0.2,
-        line_gap: 0.0,
-        new_line_size: font_size,
-    });
+    let metrics = font
+        .horizontal_line_metrics(font_size)
+        .unwrap_or(fontdue::LineMetrics {
+            ascent: font_size * 0.8,
+            descent: font_size * -0.2,
+            line_gap: 0.0,
+            new_line_size: font_size,
+        });
     let baseline = ((buf_h as f32 + metrics.ascent + metrics.descent) / 2.0) as i32;
     let max_x = buf_w - padding_x;
 

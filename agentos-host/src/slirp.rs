@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use std::os::unix::io::RawFd;
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
 static NOTIFY_PIPE_R: AtomicI32 = AtomicI32::new(-1);
 static NOTIFY_PIPE_W: AtomicI32 = AtomicI32::new(-1);
@@ -11,7 +11,8 @@ struct Slirp {
     _opaque: [u8; 0],
 }
 
-type SlirpWriteCb = unsafe extern "C" fn(buf: *const u8, len: usize, opaque: *mut libc::c_void) -> isize;
+type SlirpWriteCb =
+    unsafe extern "C" fn(buf: *const u8, len: usize, opaque: *mut libc::c_void) -> isize;
 type SlirpTimerCb = unsafe extern "C" fn(opaque: *mut libc::c_void);
 type SlirpAddPollCb = unsafe extern "C" fn(fd: i32, events: i32, opaque: *mut libc::c_void) -> i32;
 type SlirpGetREventsCb = unsafe extern "C" fn(idx: i32, opaque: *mut libc::c_void) -> i32;
@@ -21,9 +22,14 @@ struct SlirpCb {
     send_packet: SlirpWriteCb,
     guest_error: unsafe extern "C" fn(msg: *const libc::c_char, opaque: *mut libc::c_void),
     clock_get_ns: unsafe extern "C" fn(opaque: *mut libc::c_void) -> i64,
-    timer_new: unsafe extern "C" fn(cb: SlirpTimerCb, cb_opaque: *mut libc::c_void, opaque: *mut libc::c_void) -> *mut libc::c_void,
+    timer_new: unsafe extern "C" fn(
+        cb: SlirpTimerCb,
+        cb_opaque: *mut libc::c_void,
+        opaque: *mut libc::c_void,
+    ) -> *mut libc::c_void,
     timer_free: unsafe extern "C" fn(timer: *mut libc::c_void, opaque: *mut libc::c_void),
-    timer_mod: unsafe extern "C" fn(timer: *mut libc::c_void, expire_time: i64, opaque: *mut libc::c_void),
+    timer_mod:
+        unsafe extern "C" fn(timer: *mut libc::c_void, expire_time: i64, opaque: *mut libc::c_void),
     register_poll_fd: unsafe extern "C" fn(fd: i32, opaque: *mut libc::c_void),
     unregister_poll_fd: unsafe extern "C" fn(fd: i32, opaque: *mut libc::c_void),
     notify: unsafe extern "C" fn(opaque: *mut libc::c_void),
@@ -65,11 +71,25 @@ struct SlirpConfig {
 }
 
 unsafe extern "C" {
-    fn slirp_new(cfg: *const SlirpConfig, callbacks: *const SlirpCb, opaque: *mut libc::c_void) -> *mut Slirp;
+    fn slirp_new(
+        cfg: *const SlirpConfig,
+        callbacks: *const SlirpCb,
+        opaque: *mut libc::c_void,
+    ) -> *mut Slirp;
     fn slirp_cleanup(slirp: *mut Slirp);
     fn slirp_input(slirp: *mut Slirp, pkt: *const u8, pkt_len: i32);
-    fn slirp_pollfds_fill(slirp: *mut Slirp, timeout: *mut u32, add_poll: SlirpAddPollCb, opaque: *mut libc::c_void);
-    fn slirp_pollfds_poll(slirp: *mut Slirp, select_error: i32, get_revents: SlirpGetREventsCb, opaque: *mut libc::c_void);
+    fn slirp_pollfds_fill(
+        slirp: *mut Slirp,
+        timeout: *mut u32,
+        add_poll: SlirpAddPollCb,
+        opaque: *mut libc::c_void,
+    );
+    fn slirp_pollfds_poll(
+        slirp: *mut Slirp,
+        select_error: i32,
+        get_revents: SlirpGetREventsCb,
+        opaque: *mut libc::c_void,
+    );
 }
 
 const SLIRP_POLL_IN: i32 = 1 << 0;
@@ -98,11 +118,20 @@ struct Timer {
 
 unsafe impl Send for Timer {}
 
-unsafe extern "C" fn cb_send_packet(buf: *const u8, len: usize, opaque: *mut libc::c_void) -> isize {
+unsafe extern "C" fn cb_send_packet(
+    buf: *const u8,
+    len: usize,
+    opaque: *mut libc::c_void,
+) -> isize {
     unsafe {
         let state = &*(opaque as *const SlirpState);
         let data = std::slice::from_raw_parts(buf, len);
-        libc::send(state.vm_fd, data.as_ptr() as *const libc::c_void, data.len(), 0)
+        libc::send(
+            state.vm_fd,
+            data.as_ptr() as *const libc::c_void,
+            data.len(),
+            0,
+        )
     }
 }
 
@@ -115,13 +144,20 @@ unsafe extern "C" fn cb_guest_error(msg: *const libc::c_char, _opaque: *mut libc
 
 unsafe extern "C" fn cb_clock_get_ns(_opaque: *mut libc::c_void) -> i64 {
     unsafe {
-        let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+        let mut ts = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
         libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts);
         ts.tv_sec * 1_000_000_000 + ts.tv_nsec
     }
 }
 
-unsafe extern "C" fn cb_timer_new(cb: SlirpTimerCb, cb_opaque: *mut libc::c_void, opaque: *mut libc::c_void) -> *mut libc::c_void {
+unsafe extern "C" fn cb_timer_new(
+    cb: SlirpTimerCb,
+    cb_opaque: *mut libc::c_void,
+    opaque: *mut libc::c_void,
+) -> *mut libc::c_void {
     unsafe {
         let state = &mut *(opaque as *mut SlirpState);
         let idx = state.timers.len();
@@ -144,7 +180,11 @@ unsafe extern "C" fn cb_timer_free(timer: *mut libc::c_void, opaque: *mut libc::
     }
 }
 
-unsafe extern "C" fn cb_timer_mod(timer: *mut libc::c_void, expire_time_ms: i64, opaque: *mut libc::c_void) {
+unsafe extern "C" fn cb_timer_mod(
+    timer: *mut libc::c_void,
+    expire_time_ms: i64,
+    opaque: *mut libc::c_void,
+) {
     // slirp passes milliseconds; convert to nanoseconds for clock_gettime comparison
     unsafe {
         let state = &mut *(opaque as *mut SlirpState);
@@ -198,15 +238,30 @@ pub fn create_socketpair() -> Result<(RawFd, RawFd)> {
     let mut fds = [0i32; 2];
     let ret = unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_DGRAM, 0, fds.as_mut_ptr()) };
     if ret < 0 {
-        return Err(anyhow::anyhow!("socketpair failed: {}", std::io::Error::last_os_error()));
+        return Err(anyhow::anyhow!(
+            "socketpair failed: {}",
+            std::io::Error::last_os_error()
+        ));
     }
 
     unsafe {
         let sndbuf: libc::c_int = 65550;
         let rcvbuf: libc::c_int = 1024 * 1024;
         for fd in &fds {
-            libc::setsockopt(*fd, libc::SOL_SOCKET, libc::SO_SNDBUF, &sndbuf as *const _ as *const libc::c_void, std::mem::size_of::<libc::c_int>() as u32);
-            libc::setsockopt(*fd, libc::SOL_SOCKET, libc::SO_RCVBUF, &rcvbuf as *const _ as *const libc::c_void, std::mem::size_of::<libc::c_int>() as u32);
+            libc::setsockopt(
+                *fd,
+                libc::SOL_SOCKET,
+                libc::SO_SNDBUF,
+                &sndbuf as *const _ as *const libc::c_void,
+                std::mem::size_of::<libc::c_int>() as u32,
+            );
+            libc::setsockopt(
+                *fd,
+                libc::SOL_SOCKET,
+                libc::SO_RCVBUF,
+                &rcvbuf as *const _ as *const libc::c_void,
+                std::mem::size_of::<libc::c_int>() as u32,
+            );
         }
     }
 
@@ -237,7 +292,10 @@ fn run_slirp(vm_fd: RawFd, running: &AtomicBool) -> Result<()> {
         let mut pipe_fds = [0i32; 2];
         let ret = libc::pipe(pipe_fds.as_mut_ptr());
         if ret < 0 {
-            return Err(anyhow::anyhow!("pipe failed: {}", std::io::Error::last_os_error()));
+            return Err(anyhow::anyhow!(
+                "pipe failed: {}",
+                std::io::Error::last_os_error()
+            ));
         }
         libc::fcntl(pipe_fds[0], libc::F_SETFL, libc::O_NONBLOCK);
         libc::fcntl(pipe_fds[1], libc::F_SETFL, libc::O_NONBLOCK);
@@ -348,7 +406,8 @@ fn run_slirp(vm_fd: RawFd, running: &AtomicBool) -> Result<()> {
             .collect();
 
         let timeout = timeout_ms.min(100) as i32;
-        let ret = unsafe { libc::poll(pollfds.as_mut_ptr(), pollfds.len() as libc::nfds_t, timeout) };
+        let ret =
+            unsafe { libc::poll(pollfds.as_mut_ptr(), pollfds.len() as libc::nfds_t, timeout) };
 
         // Fire expired timers
         let now_ns = unsafe { cb_clock_get_ns(std::ptr::null_mut()) };
@@ -393,14 +452,24 @@ fn run_slirp(vm_fd: RawFd, running: &AtomicBool) -> Result<()> {
 
         // Let slirp process its fds
         unsafe {
-            slirp_pollfds_poll(slirp, if ret < 0 { 1 } else { 0 }, cb_get_revents, state_ptr);
+            slirp_pollfds_poll(
+                slirp,
+                if ret < 0 { 1 } else { 0 },
+                cb_get_revents,
+                state_ptr,
+            );
         }
 
         // Drain notify pipe if it was signaled
         if notify_poll_idx < pollfds.len() && pollfds[notify_poll_idx].revents & libc::POLLIN != 0 {
             let mut drain = [0u8; 64];
             unsafe {
-                while libc::read(notify_r, drain.as_mut_ptr() as *mut libc::c_void, drain.len()) > 0 {}
+                while libc::read(
+                    notify_r,
+                    drain.as_mut_ptr() as *mut libc::c_void,
+                    drain.len(),
+                ) > 0
+                {}
             }
             tracing::debug!("slirp notify pipe drained");
         }

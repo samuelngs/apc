@@ -20,6 +20,7 @@ pub const ABS_X: u16 = 0x00;
 pub const ABS_Y: u16 = 0x01;
 pub const ABS_MAX: u32 = 32767;
 
+pub const INPUT_PROP_POINTER: u16 = 0x00;
 pub const INPUT_PROP_DIRECT: u16 = 0x01;
 
 pub const BTN_LEFT: u16 = 0x110;
@@ -66,10 +67,12 @@ pub type KrunInputCreateFn = Option<
     ) -> i32,
 >;
 pub type KrunInputDestroyFn = Option<unsafe extern "C" fn(instance: *mut c_void) -> i32>;
-pub type KrunInputQueryDeviceNameFn =
-    Option<unsafe extern "C" fn(instance: *mut c_void, name_buf: *mut u8, name_buf_len: usize) -> i32>;
-pub type KrunInputQuerySerialNameFn =
-    Option<unsafe extern "C" fn(instance: *mut c_void, name_buf: *mut u8, name_buf_len: usize) -> i32>;
+pub type KrunInputQueryDeviceNameFn = Option<
+    unsafe extern "C" fn(instance: *mut c_void, name_buf: *mut u8, name_buf_len: usize) -> i32,
+>;
+pub type KrunInputQuerySerialNameFn = Option<
+    unsafe extern "C" fn(instance: *mut c_void, name_buf: *mut u8, name_buf_len: usize) -> i32,
+>;
 pub type KrunInputQueryDeviceIdsFn =
     Option<unsafe extern "C" fn(instance: *mut c_void, ids: *mut KrunInputDeviceIds) -> i32>;
 pub type KrunInputQueryEventCapabilitiesFn = Option<
@@ -167,7 +170,9 @@ impl DeviceQueue {
             let mut buf = [0u8; 64];
             loop {
                 let n = unsafe { libc::read(self.pipe[0], buf.as_mut_ptr() as *mut _, buf.len()) };
-                if n <= 0 { break; }
+                if n <= 0 {
+                    break;
+                }
             }
         }
         event

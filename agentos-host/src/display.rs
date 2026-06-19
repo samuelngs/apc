@@ -64,11 +64,31 @@ fn create_iosurface(width: u32, height: u32) -> IOSurfaceRef {
     let bytes_per_element: u32 = 4;
 
     unsafe {
-        let w_num = CFNumberCreate(ptr::null(), K_CF_NUMBER_INT_TYPE, &width as *const _ as *const _);
-        let h_num = CFNumberCreate(ptr::null(), K_CF_NUMBER_INT_TYPE, &height as *const _ as *const _);
-        let stride_num = CFNumberCreate(ptr::null(), K_CF_NUMBER_INT_TYPE, &stride as *const _ as *const _);
-        let bpe_num = CFNumberCreate(ptr::null(), K_CF_NUMBER_INT_TYPE, &bytes_per_element as *const _ as *const _);
-        let fmt_num = CFNumberCreate(ptr::null(), K_CF_NUMBER_INT_TYPE, &pixel_format as *const _ as *const _);
+        let w_num = CFNumberCreate(
+            ptr::null(),
+            K_CF_NUMBER_INT_TYPE,
+            &width as *const _ as *const _,
+        );
+        let h_num = CFNumberCreate(
+            ptr::null(),
+            K_CF_NUMBER_INT_TYPE,
+            &height as *const _ as *const _,
+        );
+        let stride_num = CFNumberCreate(
+            ptr::null(),
+            K_CF_NUMBER_INT_TYPE,
+            &stride as *const _ as *const _,
+        );
+        let bpe_num = CFNumberCreate(
+            ptr::null(),
+            K_CF_NUMBER_INT_TYPE,
+            &bytes_per_element as *const _ as *const _,
+        );
+        let fmt_num = CFNumberCreate(
+            ptr::null(),
+            K_CF_NUMBER_INT_TYPE,
+            &pixel_format as *const _ as *const _,
+        );
 
         let keys: [*const c_void; 5] = [
             kIOSurfaceWidth,
@@ -174,7 +194,9 @@ impl DisplayState {
         guard.prev_display_idx = guard.display_idx;
         guard.display_idx = Some(ready);
         let surface = guard.surfaces[ready];
-        if surface.is_null() { return None; }
+        if surface.is_null() {
+            return None;
+        }
 
         Some(surface)
     }
@@ -185,7 +207,9 @@ static DISPLAY: std::sync::OnceLock<Arc<DisplayState>> = std::sync::OnceLock::ne
 
 #[cfg(target_os = "macos")]
 pub fn global_display() -> Arc<DisplayState> {
-    DISPLAY.get_or_init(|| Arc::new(DisplayState::new())).clone()
+    DISPLAY
+        .get_or_init(|| Arc::new(DisplayState::new()))
+        .clone()
 }
 
 #[cfg(target_os = "macos")]
@@ -232,7 +256,9 @@ unsafe extern "C" fn cb_configure_scanout(
         if s.is_null() {
             tracing::error!("failed to create IOSurface");
             for prev in new_surfaces.iter().filter(|p| !p.is_null()) {
-                unsafe { CFRelease(*prev as *const _); }
+                unsafe {
+                    CFRelease(*prev as *const _);
+                }
             }
             return -1;
         }
@@ -326,12 +352,13 @@ pub fn create_backend() -> KrunDisplayBackend {
     backend.features = KRUN_DISPLAY_FEATURE_BASIC_FRAMEBUFFER;
     backend.create_userdata = ptr::null_mut();
     backend.create = Some(cb_create);
-    backend.vtable.basic_framebuffer = std::mem::ManuallyDrop::new(KrunDisplayBasicFramebufferVtable {
-        destroy: Some(cb_destroy),
-        disable_scanout: Some(cb_disable_scanout),
-        configure_scanout: Some(cb_configure_scanout),
-        alloc_frame: Some(cb_alloc_frame),
-        present_frame: Some(cb_present_frame),
-    });
+    backend.vtable.basic_framebuffer =
+        std::mem::ManuallyDrop::new(KrunDisplayBasicFramebufferVtable {
+            destroy: Some(cb_destroy),
+            disable_scanout: Some(cb_disable_scanout),
+            configure_scanout: Some(cb_configure_scanout),
+            alloc_frame: Some(cb_alloc_frame),
+            present_frame: Some(cb_present_frame),
+        });
     backend
 }

@@ -39,55 +39,33 @@ pub(crate) fn handle_mcp_tool(
 ) -> Option<serde_json::Value> {
     match tool {
         ToolCall::ShellExec { ref cmd } => {
-            let id = state.start_time.elapsed().as_millis();
-            let out_path = format!("/tmp/mcp-out-{id}");
+            let cmd = cmd.clone();
             let wayland_display = state.wayland_display.clone();
             let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR")
                 .unwrap_or_else(|_| format!("/run/user/{}", unsafe { libc::getuid() }));
-
-            let shell_cmd = format!(
-                "{{ {cmd}; }} 2>&1 | tee {out_path}; echo $? > {out_path}.exit; sleep 2"
-            );
-            let title = if cmd.len() > 60 {
-                format!("$ {}...", &cmd[..57])
-            } else {
-                format!("$ {cmd}")
-            };
-
-            let result = std::process::Command::new("alacritty")
-                .args(["-T", &title, "-e", "sh", "-c", &shell_cmd])
-                .env("WAYLAND_DISPLAY", &wayland_display)
-                .env("XDG_RUNTIME_DIR", &xdg_runtime_dir)
-                .env("TERM", "xterm-256color")
-                .spawn();
-
-            match result {
-                Ok(mut child) => {
-                    let pid = child.id();
-                    state.mcp_pids.push(pid);
-                    let out_path_clone = out_path.clone();
-                    std::thread::spawn(move || {
-                        let _ = child.wait();
-                        let stdout = std::fs::read_to_string(&out_path_clone).unwrap_or_default();
-                        let exit_file = format!("{out_path_clone}.exit");
-                        let exit_code: i32 = std::fs::read_to_string(&exit_file)
-                            .ok()
-                            .and_then(|s| s.trim().parse().ok())
-                            .unwrap_or(-1);
-                        let _ = std::fs::remove_file(&out_path_clone);
-                        let _ = std::fs::remove_file(&exit_file);
-                        let _ = reply_tx.send(serde_json::json!({
-                            "exit_code": exit_code,
-                            "stdout": stdout,
-                            "stderr": "",
-                        }));
-                    });
-                    return None;
-                }
-                Err(e) => {
-                    Some(serde_json::json!({ "error": format!("alacritty launch failed: {e}") }))
-                }
-            }
+            std::thread::spawn(move || {
+                let result = std::process::Command::new("sh")
+                    .args(["-lc", &cmd])
+                    .env("HOME", "/home/agentos")
+                    .env("PATH", "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin")
+                    .env("WAYLAND_DISPLAY", &wayland_display)
+                    .env("XDG_RUNTIME_DIR", &xdg_runtime_dir)
+                    .output();
+                let value = match result {
+                    Ok(out) => serde_json::json!({
+                        "exit_code": out.status.code().unwrap_or(-1),
+                        "stdout": String::from_utf8_lossy(&out.stdout).to_string(),
+                        "stderr": String::from_utf8_lossy(&out.stderr).to_string(),
+                    }),
+                    Err(e) => serde_json::json!({
+                        "exit_code": -1,
+                        "stdout": "",
+                        "stderr": format!("shell exec failed: {e}"),
+                    }),
+                };
+                let _ = reply_tx.send(value);
+            });
+            return None;
         }
 
         ToolCall::FileRead { ref path, line } => {
@@ -107,7 +85,11 @@ pub(crate) fn handle_mcp_tool(
             }))
         }
 
-        ToolCall::FileWrite { ref path, ref data, offset } => {
+        ToolCall::FileWrite {
+            ref path,
+            ref data,
+            offset,
+        } => {
             if let Err(e) = std::fs::write(path, data) {
                 return Some(serde_json::json!({ "error": format!("write failed: {e}") }));
             }
@@ -191,10 +173,7 @@ pub(crate) fn handle_mcp_tool(
 }
 
 #[cfg(target_os = "linux")]
-fn handle_sync_tool(
-    state: &mut AgentCompositor,
-    tool: ToolCall,
-) -> serde_json::Value {
+fn handle_sync_tool(state: &mut AgentCompositor, tool: ToolCall) -> serde_json::Value {
     match tool {
         ToolCall::WindowList => {
             let focused_surface = state.seat.get_keyboard().and_then(|kb| kb.current_focus());
@@ -269,6 +248,7 @@ fn handle_sync_tool(
         }
 
         ToolCall::WindowResize { id, width, height } => {
+            tracing::info!(id, width, height, "MCP window_resize begin");
             let windows: Vec<Window> = state.space.elements().cloned().collect();
             if let Some(window) = windows.get(id as usize) {
                 if let Some(toplevel) = window.toplevel() {
@@ -278,19 +258,24 @@ fn handle_sync_tool(
                     toplevel.send_configure();
                     queue_redraw(state);
                 }
+                tracing::info!(id, "MCP window_resize done");
                 serde_json::json!({ "resized": id })
             } else {
+                tracing::info!(id, "MCP window_resize window not found");
                 serde_json::json!({ "error": "window not found" })
             }
         }
 
         ToolCall::WindowMove { id, x, y } => {
+            tracing::info!(id, x, y, "MCP window_move begin");
             let windows: Vec<Window> = state.space.elements().cloned().collect();
             if let Some(window) = windows.get(id as usize) {
                 state.space.map_element(window.clone(), (x, y), true);
                 queue_redraw(state);
+                tracing::info!(id, "MCP window_move done");
                 serde_json::json!({ "moved": id })
             } else {
+                tracing::info!(id, "MCP window_move window not found");
                 serde_json::json!({ "error": "window not found" })
             }
         }
@@ -299,9 +284,8 @@ fn handle_sync_tool(
             let wayland_display = state.wayland_display.clone();
             let cmd_clone = cmd.clone();
             let cmd_name = cmd.clone();
-            let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| {
-                format!("/run/user/{}", unsafe { libc::getuid() })
-            });
+            let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR")
+                .unwrap_or_else(|_| format!("/run/user/{}", unsafe { libc::getuid() }));
             std::thread::spawn(move || {
                 let result = std::process::Command::new("sh")
                     .args(["-c", &cmd_clone])
@@ -363,14 +347,11 @@ fn handle_sync_tool(
         ToolCall::MouseMove { x, y } => {
             let pointer = state.pointer.clone();
             let pos: Point<f64, Logical> = (x as f64, y as f64).into();
-            let under = state
-                .space
-                .element_under(pos)
-                .and_then(|(window, loc)| {
-                    window
-                        .surface_under(pos - loc.to_f64(), WindowSurfaceType::ALL)
-                        .map(|(s, surf_loc)| (s, (surf_loc + loc).to_f64()))
-                });
+            let under = state.space.element_under(pos).and_then(|(window, loc)| {
+                window
+                    .surface_under(pos - loc.to_f64(), WindowSurfaceType::ALL)
+                    .map(|(s, surf_loc)| (s, (surf_loc + loc).to_f64()))
+            });
             let serial = SERIAL_COUNTER.next_serial();
             pointer.motion(
                 state,
@@ -381,7 +362,7 @@ fn handle_sync_tool(
                     time: state.start_time.elapsed().as_millis() as u32,
                 },
             );
-            queue_redraw(state);
+            state.finish_pointer_motion();
             serde_json::json!({ "moved": [x, y] })
         }
 
@@ -438,7 +419,8 @@ fn handle_sync_tool(
                         let shift_xkb: u32 = 42 + 8;
                         if shift {
                             keyboard.input::<(), _>(
-                                state, shift_xkb.into(),
+                                state,
+                                shift_xkb.into(),
                                 smithay::backend::input::KeyState::Pressed,
                                 SERIAL_COUNTER.next_serial(),
                                 time,
@@ -446,14 +428,16 @@ fn handle_sync_tool(
                             );
                         }
                         keyboard.input::<(), _>(
-                            state, keycode.into(),
+                            state,
+                            keycode.into(),
                             smithay::backend::input::KeyState::Pressed,
                             SERIAL_COUNTER.next_serial(),
                             time + 1,
                             |_, _, _| FilterResult::Forward,
                         );
                         keyboard.input::<(), _>(
-                            state, keycode.into(),
+                            state,
+                            keycode.into(),
                             smithay::backend::input::KeyState::Released,
                             SERIAL_COUNTER.next_serial(),
                             time + 2,
@@ -461,7 +445,8 @@ fn handle_sync_tool(
                         );
                         if shift {
                             keyboard.input::<(), _>(
-                                state, shift_xkb.into(),
+                                state,
+                                shift_xkb.into(),
                                 smithay::backend::input::KeyState::Released,
                                 SERIAL_COUNTER.next_serial(),
                                 time + 3,
@@ -477,13 +462,20 @@ fn handle_sync_tool(
             }
         }
 
-        ToolCall::KeyboardKey { ref key, ref modifiers } => {
+        ToolCall::KeyboardKey {
+            ref key,
+            ref modifiers,
+        } => {
             if let Some(keyboard) = state.seat.get_keyboard() {
                 let time = state.start_time.elapsed().as_millis() as u32;
-                let mod_codes: Vec<u32> = modifiers.iter().filter_map(|m| modifier_to_evdev(m)).collect();
+                let mod_codes: Vec<u32> = modifiers
+                    .iter()
+                    .filter_map(|m| modifier_to_evdev(m))
+                    .collect();
                 for &mc in &mod_codes {
                     keyboard.input::<(), _>(
-                        state, mc.into(),
+                        state,
+                        mc.into(),
                         smithay::backend::input::KeyState::Pressed,
                         SERIAL_COUNTER.next_serial(),
                         time,
@@ -492,14 +484,16 @@ fn handle_sync_tool(
                 }
                 if let Some(keycode) = key_name_to_evdev(key) {
                     keyboard.input::<(), _>(
-                        state, keycode.into(),
+                        state,
+                        keycode.into(),
                         smithay::backend::input::KeyState::Pressed,
                         SERIAL_COUNTER.next_serial(),
                         time + 1,
                         |_, _, _| FilterResult::Forward,
                     );
                     keyboard.input::<(), _>(
-                        state, keycode.into(),
+                        state,
+                        keycode.into(),
                         smithay::backend::input::KeyState::Released,
                         SERIAL_COUNTER.next_serial(),
                         time + 2,
@@ -508,7 +502,8 @@ fn handle_sync_tool(
                 }
                 for &mc in mod_codes.iter().rev() {
                     keyboard.input::<(), _>(
-                        state, mc.into(),
+                        state,
+                        mc.into(),
                         smithay::backend::input::KeyState::Released,
                         SERIAL_COUNTER.next_serial(),
                         time + 3,
@@ -521,22 +516,23 @@ fn handle_sync_tool(
             }
         }
 
-        ToolCall::ScreenCapture { region: _, scale: _ } => {
-            match capture_screen(state) {
-                Ok((w, h, png_b64)) => {
-                    serde_json::json!({
-                        "width": w,
-                        "height": h,
-                        "format": "png_base64",
-                        "data": png_b64,
-                    })
-                }
-                Err(e) => {
-                    tracing::error!(%e, "screen capture failed");
-                    serde_json::json!({ "error": format!("capture failed: {e}") })
-                }
+        ToolCall::ScreenCapture {
+            region: _,
+            scale: _,
+        } => match capture_screen(state) {
+            Ok((w, h, png_b64)) => {
+                serde_json::json!({
+                    "width": w,
+                    "height": h,
+                    "format": "png_base64",
+                    "data": png_b64,
+                })
             }
-        }
+            Err(e) => {
+                tracing::error!(%e, "screen capture failed");
+                serde_json::json!({ "error": format!("capture failed: {e}") })
+            }
+        },
 
         _ => serde_json::json!({ "error": "unhandled tool" }),
     }
@@ -567,16 +563,18 @@ fn open_in_editor(state: &mut AgentCompositor, path: &str, line: Option<u32>) {
     } else {
         let goto_arg = line.map(|l| format!("+{l}")).unwrap_or_default();
         let mut args = vec![
-            "-T".to_string(), format!("nvim - {path}"),
-            "-e".to_string(), "nvim".to_string(),
-            "--listen".to_string(), NVIM_SOCKET.to_string(),
+            "-T".to_string(),
+            format!("nvim - {path}"),
+            "nvim".to_string(),
+            "--listen".to_string(),
+            NVIM_SOCKET.to_string(),
         ];
         if !goto_arg.is_empty() {
             args.push(goto_arg);
         }
         args.push(path.to_string());
 
-        match std::process::Command::new("alacritty")
+        match std::process::Command::new("foot")
             .args(&args)
             .env("WAYLAND_DISPLAY", &wayland_display)
             .env("XDG_RUNTIME_DIR", &xdg_runtime_dir)
@@ -597,34 +595,62 @@ fn open_in_editor(state: &mut AgentCompositor, path: &str, line: Option<u32>) {
 #[cfg(target_os = "linux")]
 fn char_to_evdev_keycode(ch: char) -> Option<(u32, bool)> {
     const OFF: u32 = 8;
-    fn alpha(evdev: u32) -> u32 { evdev + 8 }
+    fn alpha(evdev: u32) -> u32 {
+        evdev + 8
+    }
     match ch {
-        'a' => Some((alpha(30), false)), 'b' => Some((alpha(48), false)),
-        'c' => Some((alpha(46), false)), 'd' => Some((alpha(32), false)),
-        'e' => Some((alpha(18), false)), 'f' => Some((alpha(33), false)),
-        'g' => Some((alpha(34), false)), 'h' => Some((alpha(35), false)),
-        'i' => Some((alpha(23), false)), 'j' => Some((alpha(36), false)),
-        'k' => Some((alpha(37), false)), 'l' => Some((alpha(38), false)),
-        'm' => Some((alpha(50), false)), 'n' => Some((alpha(49), false)),
-        'o' => Some((alpha(24), false)), 'p' => Some((alpha(25), false)),
-        'q' => Some((alpha(16), false)), 'r' => Some((alpha(19), false)),
-        's' => Some((alpha(31), false)), 't' => Some((alpha(20), false)),
-        'u' => Some((alpha(22), false)), 'v' => Some((alpha(47), false)),
-        'w' => Some((alpha(17), false)), 'x' => Some((alpha(45), false)),
-        'y' => Some((alpha(21), false)), 'z' => Some((alpha(44), false)),
-        'A' => Some((alpha(30), true)), 'B' => Some((alpha(48), true)),
-        'C' => Some((alpha(46), true)), 'D' => Some((alpha(32), true)),
-        'E' => Some((alpha(18), true)), 'F' => Some((alpha(33), true)),
-        'G' => Some((alpha(34), true)), 'H' => Some((alpha(35), true)),
-        'I' => Some((alpha(23), true)), 'J' => Some((alpha(36), true)),
-        'K' => Some((alpha(37), true)), 'L' => Some((alpha(38), true)),
-        'M' => Some((alpha(50), true)), 'N' => Some((alpha(49), true)),
-        'O' => Some((alpha(24), true)), 'P' => Some((alpha(25), true)),
-        'Q' => Some((alpha(16), true)), 'R' => Some((alpha(19), true)),
-        'S' => Some((alpha(31), true)), 'T' => Some((alpha(20), true)),
-        'U' => Some((alpha(22), true)), 'V' => Some((alpha(47), true)),
-        'W' => Some((alpha(17), true)), 'X' => Some((alpha(45), true)),
-        'Y' => Some((alpha(21), true)), 'Z' => Some((alpha(44), true)),
+        'a' => Some((alpha(30), false)),
+        'b' => Some((alpha(48), false)),
+        'c' => Some((alpha(46), false)),
+        'd' => Some((alpha(32), false)),
+        'e' => Some((alpha(18), false)),
+        'f' => Some((alpha(33), false)),
+        'g' => Some((alpha(34), false)),
+        'h' => Some((alpha(35), false)),
+        'i' => Some((alpha(23), false)),
+        'j' => Some((alpha(36), false)),
+        'k' => Some((alpha(37), false)),
+        'l' => Some((alpha(38), false)),
+        'm' => Some((alpha(50), false)),
+        'n' => Some((alpha(49), false)),
+        'o' => Some((alpha(24), false)),
+        'p' => Some((alpha(25), false)),
+        'q' => Some((alpha(16), false)),
+        'r' => Some((alpha(19), false)),
+        's' => Some((alpha(31), false)),
+        't' => Some((alpha(20), false)),
+        'u' => Some((alpha(22), false)),
+        'v' => Some((alpha(47), false)),
+        'w' => Some((alpha(17), false)),
+        'x' => Some((alpha(45), false)),
+        'y' => Some((alpha(21), false)),
+        'z' => Some((alpha(44), false)),
+        'A' => Some((alpha(30), true)),
+        'B' => Some((alpha(48), true)),
+        'C' => Some((alpha(46), true)),
+        'D' => Some((alpha(32), true)),
+        'E' => Some((alpha(18), true)),
+        'F' => Some((alpha(33), true)),
+        'G' => Some((alpha(34), true)),
+        'H' => Some((alpha(35), true)),
+        'I' => Some((alpha(23), true)),
+        'J' => Some((alpha(36), true)),
+        'K' => Some((alpha(37), true)),
+        'L' => Some((alpha(38), true)),
+        'M' => Some((alpha(50), true)),
+        'N' => Some((alpha(49), true)),
+        'O' => Some((alpha(24), true)),
+        'P' => Some((alpha(25), true)),
+        'Q' => Some((alpha(16), true)),
+        'R' => Some((alpha(19), true)),
+        'S' => Some((alpha(31), true)),
+        'T' => Some((alpha(20), true)),
+        'U' => Some((alpha(22), true)),
+        'V' => Some((alpha(47), true)),
+        'W' => Some((alpha(17), true)),
+        'X' => Some((alpha(45), true)),
+        'Y' => Some((alpha(21), true)),
+        'Z' => Some((alpha(44), true)),
         '1' => Some((2 + OFF, false)),
         '2' => Some((3 + OFF, false)),
         '3' => Some((4 + OFF, false)),

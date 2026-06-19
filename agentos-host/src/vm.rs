@@ -35,7 +35,11 @@ pub mod krun {
         }
     }
 
-    pub fn configure_vm(config: &VmConfig, mcp_socket_path: &str, fs_socket_path: &str) -> Result<(u32, i32)> {
+    pub fn configure_vm(
+        config: &VmConfig,
+        mcp_socket_path: &str,
+        fs_socket_path: &str,
+    ) -> Result<(u32, i32)> {
         unsafe {
             // Pre-load ANGLE's libEGL on the main thread.
             // ANGLE's static initializers access Cocoa/Metal and deadlock
@@ -59,15 +63,16 @@ pub mod krun {
                 "krun_set_vm_config",
             )?;
 
-            let kernel_path = CString::new(
-                config.kernel.to_str().context("invalid kernel path")?,
-            )?;
+            let kernel_path = CString::new(config.kernel.to_str().context("invalid kernel path")?)?;
 
-            let initramfs = config.initrd.as_ref().map(|p| {
-                CString::new(p.to_str().unwrap_or(""))
-            }).transpose()?;
+            let initramfs = config
+                .initrd
+                .as_ref()
+                .map(|p| CString::new(p.to_str().unwrap_or("")))
+                .transpose()?;
 
-            let cmdline_with_scale = format!("{} agentos.scale={}", config.cmdline, config.display_scale);
+            let cmdline_with_scale =
+                format!("{} agentos.scale={}", config.cmdline, config.display_scale);
             let cmdline = CString::new(cmdline_with_scale.as_str())?;
 
             check(
@@ -75,7 +80,10 @@ pub mod krun {
                     ctx,
                     kernel_path.as_ptr(),
                     KRUN_KERNEL_FORMAT_RAW,
-                    initramfs.as_ref().map(|s| s.as_ptr()).unwrap_or(std::ptr::null()),
+                    initramfs
+                        .as_ref()
+                        .map(|s| s.as_ptr())
+                        .unwrap_or(std::ptr::null()),
                     cmdline.as_ptr(),
                 ),
                 "krun_set_kernel",
@@ -85,7 +93,9 @@ pub mod krun {
             tracing::info!(gpu_supported, "GPU feature check");
 
             if gpu_supported == 1 {
-                let gpu_flags: u32 = VIRGLRENDERER_USE_EGL | VIRGLRENDERER_THREAD_SYNC | VIRGLRENDERER_USE_ASYNC_FENCE_CB;
+                let gpu_flags: u32 = VIRGLRENDERER_USE_EGL
+                    | VIRGLRENDERER_THREAD_SYNC
+                    | VIRGLRENDERER_USE_ASYNC_FENCE_CB;
                 let shm_size: u64 = 512 * 1024 * 1024;
                 check(
                     krun_set_gpu_options2(ctx, gpu_flags, shm_size),
@@ -94,11 +104,14 @@ pub mod krun {
 
                 let phys_w = config.display_width * config.display_scale;
                 let phys_h = config.display_height * config.display_scale;
-                let display_id = check(
-                    krun_add_display(ctx, phys_w, phys_h),
-                    "krun_add_display",
-                )?;
-                tracing::info!(display_id, phys_w, phys_h, scale = config.display_scale, "display added");
+                let display_id = check(krun_add_display(ctx, phys_w, phys_h), "krun_add_display")?;
+                tracing::info!(
+                    display_id,
+                    phys_w,
+                    phys_h,
+                    scale = config.display_scale,
+                    "display added"
+                );
 
                 let backend = if config.headless {
                     Box::new(crate::headless::create_headless_backend())
@@ -128,7 +141,8 @@ pub mod krun {
                         ctx,
                         &*kbd_config as *const input::KrunInputConfig as *const std::ffi::c_void,
                         std::mem::size_of::<input::KrunInputConfig>(),
-                        &*kbd_events as *const input::KrunInputEventProvider as *const std::ffi::c_void,
+                        &*kbd_events as *const input::KrunInputEventProvider
+                            as *const std::ffi::c_void,
                         std::mem::size_of::<input::KrunInputEventProvider>(),
                     ),
                     "krun_add_input_device (keyboard)",
@@ -144,7 +158,8 @@ pub mod krun {
                         ctx,
                         &*mouse_config as *const input::KrunInputConfig as *const std::ffi::c_void,
                         std::mem::size_of::<input::KrunInputConfig>(),
-                        &*mouse_events as *const input::KrunInputEventProvider as *const std::ffi::c_void,
+                        &*mouse_events as *const input::KrunInputEventProvider
+                            as *const std::ffi::c_void,
                         std::mem::size_of::<input::KrunInputEventProvider>(),
                     ),
                     "krun_add_input_device (mouse)",
@@ -157,8 +172,7 @@ pub mod krun {
             {
                 use std::fs::File;
                 use std::os::unix::io::IntoRawFd;
-                let log = File::create("/tmp/agentos-console.log")
-                    .context("create console log")?;
+                let log = File::create("/tmp/agentos-console.log").context("create console log")?;
                 let fd = log.into_raw_fd();
                 check(
                     krun_add_serial_console_default(ctx, -1, fd),
@@ -168,18 +182,28 @@ pub mod krun {
 
             let socket_path = CString::new(mcp_socket_path)?;
             check(
-                krun_add_vsock_port2(ctx, agentos_protocol::VSOCK_PORT, socket_path.as_ptr(), true),
+                krun_add_vsock_port2(
+                    ctx,
+                    agentos_protocol::VSOCK_PORT,
+                    socket_path.as_ptr(),
+                    true,
+                ),
                 "krun_add_vsock_port2 (mcp)",
             )?;
 
             let fs_path = CString::new(fs_socket_path)?;
             check(
-                krun_add_vsock_port2(ctx, agentos_protocol::fs::VSOCK_FS_PORT, fs_path.as_ptr(), true),
+                krun_add_vsock_port2(
+                    ctx,
+                    agentos_protocol::fs::VSOCK_FS_PORT,
+                    fs_path.as_ptr(),
+                    true,
+                ),
                 "krun_add_vsock_port2 (fs)",
             )?;
 
-            let (krun_net_fd, slirp_fd) = crate::slirp::create_socketpair()
-                .context("create net socketpair")?;
+            let (krun_net_fd, slirp_fd) =
+                crate::slirp::create_socketpair().context("create net socketpair")?;
 
             let mut mac: [u8; 6] = [0x52, 0x54, 0x00, 0x12, 0x34, 0x56];
             // No checksum/TSO offload — slirp expects valid checksums in all frames
@@ -199,20 +223,22 @@ pub mod krun {
 
             if let Some(disk) = &config.disk {
                 let block_id = CString::new("root")?;
-                let disk_path = CString::new(
-                    disk.to_str().context("invalid disk path")?,
-                )?;
+                let disk_path = CString::new(disk.to_str().context("invalid disk path")?)?;
                 check(
-                    krun_add_disk2(ctx, block_id.as_ptr(), disk_path.as_ptr(), KRUN_DISK_FORMAT_RAW, false),
+                    krun_add_disk2(
+                        ctx,
+                        block_id.as_ptr(),
+                        disk_path.as_ptr(),
+                        KRUN_DISK_FORMAT_RAW,
+                        false,
+                    ),
                     "krun_add_disk2",
                 )?;
             }
 
             if let Some(share) = &config.shared_dir {
                 let tag = CString::new("shared")?;
-                let path = CString::new(
-                    share.to_str().context("invalid shared dir path")?,
-                )?;
+                let path = CString::new(share.to_str().context("invalid shared dir path")?)?;
                 check(
                     krun_add_virtiofs(ctx, tag.as_ptr(), path.as_ptr()),
                     "krun_add_virtiofs",
@@ -222,7 +248,10 @@ pub mod krun {
             tracing::info!(
                 cpus = config.cpus,
                 memory_mb = config.memory_mb,
-                display = format!("{}x{}@{}x", config.display_width, config.display_height, config.display_scale),
+                display = format!(
+                    "{}x{}@{}x",
+                    config.display_width, config.display_height, config.display_scale
+                ),
                 mcp_socket = mcp_socket_path,
                 "VM configured via libkrun"
             );

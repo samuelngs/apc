@@ -107,8 +107,12 @@ const FONT_6X10: [[u8; 10]; 95] = [
 pub fn render_text_buffer(
     w: i32,
     h: i32,
-    bg_r: u8, bg_g: u8, bg_b: u8,
-    fg_r: u8, fg_g: u8, fg_b: u8,
+    bg_r: u8,
+    bg_g: u8,
+    bg_b: u8,
+    fg_r: u8,
+    fg_g: u8,
+    fg_b: u8,
     text: &str,
 ) -> Vec<u8> {
     let mut data = vec![0u8; (w * h * 4) as usize];
@@ -126,16 +130,22 @@ pub fn render_text_buffer(
     let max_chars = ((w as usize).saturating_sub(text_x + 2)) / FONT_WIDTH;
     for (ci, ch) in text.chars().take(max_chars).enumerate() {
         let idx = (ch as usize).wrapping_sub(32);
-        if idx >= 95 { continue; }
+        if idx >= 95 {
+            continue;
+        }
         let glyph = &FONT_6X10[idx];
         for row in 0..FONT_HEIGHT {
             let py = text_y + row;
-            if py >= h as usize { break; }
+            if py >= h as usize {
+                break;
+            }
             let bits = glyph[row];
             for col in 0..FONT_WIDTH {
                 if bits & (0x20 >> col) != 0 {
                     let px = text_x + ci * FONT_WIDTH + col;
-                    if px >= w as usize { break; }
+                    if px >= w as usize {
+                        break;
+                    }
                     let i = (py * w as usize + px) * 4;
                     data[i] = fg_r;
                     data[i + 1] = fg_g;
@@ -147,4 +157,3 @@ pub fn render_text_buffer(
     }
     data
 }
-

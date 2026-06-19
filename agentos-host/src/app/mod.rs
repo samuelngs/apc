@@ -8,7 +8,7 @@ use crate::vm::VmConfig;
 #[cfg(target_os = "macos")]
 use anyhow::Result;
 #[cfg(target_os = "macos")]
-use objc2::{msg_send, MainThreadMarker};
+use objc2::{MainThreadMarker, msg_send};
 #[cfg(target_os = "macos")]
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
 #[cfg(target_os = "macos")]
@@ -19,7 +19,8 @@ use std::sync::Mutex;
 #[cfg(target_os = "macos")]
 static DISPLAY_SCALE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
 #[cfg(target_os = "macos")]
-static LAST_DISPLAYED_SURFACE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static LAST_DISPLAYED_SURFACE: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
 #[cfg(target_os = "macos")]
 static PRESSED_KEYS: Mutex<Option<std::collections::HashSet<u16>>> = Mutex::new(None);
 
@@ -29,7 +30,8 @@ const NSEC_PER_MSEC: u64 = 1_000_000;
 #[cfg(target_os = "macos")]
 fn ca_transaction_begin() {
     unsafe {
-        let cls: &objc2::runtime::AnyClass = objc2::runtime::AnyClass::get(c"CATransaction").unwrap();
+        let cls: &objc2::runtime::AnyClass =
+            objc2::runtime::AnyClass::get(c"CATransaction").unwrap();
         let _: () = msg_send![cls, begin];
     }
 }
@@ -37,7 +39,8 @@ fn ca_transaction_begin() {
 #[cfg(target_os = "macos")]
 fn ca_transaction_set_disable_actions(disable: bool) {
     unsafe {
-        let cls: &objc2::runtime::AnyClass = objc2::runtime::AnyClass::get(c"CATransaction").unwrap();
+        let cls: &objc2::runtime::AnyClass =
+            objc2::runtime::AnyClass::get(c"CATransaction").unwrap();
         let _: () = msg_send![cls, setDisableActions: disable];
     }
 }
@@ -45,7 +48,8 @@ fn ca_transaction_set_disable_actions(disable: bool) {
 #[cfg(target_os = "macos")]
 fn ca_transaction_commit() {
     unsafe {
-        let cls: &objc2::runtime::AnyClass = objc2::runtime::AnyClass::get(c"CATransaction").unwrap();
+        let cls: &objc2::runtime::AnyClass =
+            objc2::runtime::AnyClass::get(c"CATransaction").unwrap();
         let _: () = msg_send![cls, commit];
     }
 }

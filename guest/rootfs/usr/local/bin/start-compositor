@@ -1,38 +1,77 @@
 #!/bin/sh
-echo "start-compositor: script started" > /dev/kmsg 2>/dev/null
+PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 
-for i in $(seq 1 30); do
+kmsg() { echo "$1" > /dev/kmsg 2>/dev/null || true; }
+
+kmsg "start-compositor: script started"
+
+for i in $(seq 1 40); do
     [ -e /dev/dri/card0 ] && break
-    sleep 0.5
+    sleep 0.25
 done
 
 if [ ! -e /dev/dri/card0 ]; then
-    echo "start-compositor: no DRM device found" > /dev/kmsg 2>/dev/null
-    sleep 10
+    kmsg "start-compositor: no DRM device found"
+    sleep 2
     exit 1
 fi
 
-echo "start-compositor: found card0, setting up env" > /dev/kmsg 2>/dev/null
-
-AGENTOS_UID=$(id -u agentos 2>/dev/null || echo 1000)
-export XDG_RUNTIME_DIR=/run/user/$AGENTOS_UID
+AGENTOS_UID="$(id -u agentos 2>/dev/null || echo 1000)"
+AGENTOS_GID="$(id -g agentos 2>/dev/null || echo 1000)"
+XDG_RUNTIME_DIR="/run/user/$AGENTOS_UID"
 mkdir -p "$XDG_RUNTIME_DIR"
-chown agentos:agentos "$XDG_RUNTIME_DIR"
+chown "$AGENTOS_UID:$AGENTOS_GID" "$XDG_RUNTIME_DIR"
 chmod 0700 "$XDG_RUNTIME_DIR"
 
-export WLR_BACKENDS=drm
-export WLR_RENDERER=gles2
-export LIBSEAT_BACKEND=noop
-export HOME=/home/agentos
+AGENTOS_SCALE="$(sed -n 's/.*agentos\.scale=\([0-9][0-9]*\).*/\1/p' /proc/cmdline 2>/dev/null)"
+AGENTOS_SCALE="${AGENTOS_SCALE:-2}"
+XCURSOR_SIZE="$((24 * AGENTOS_SCALE))"
+DEBUG_SKIP_CLIENT_SURFACES=
+if grep -qw 'agentos.skip_client_surfaces=1' /proc/cmdline 2>/dev/null; then
+    DEBUG_SKIP_CLIENT_SURFACES=AGENTOS_DEBUG_SKIP_CLIENT_SURFACES=1
+fi
 
-AGENTOS_SCALE=$(sed -n 's/.*agentos\.scale=\([0-9]*\).*/\1/p' /proc/cmdline 2>/dev/null)
-AGENTOS_SCALE=${AGENTOS_SCALE:-2}
-XCURSOR_SIZE=$((24 * AGENTOS_SCALE))
-
-if [ -x /usr/local/bin/agentos-compositor ]; then
-    echo "start-compositor: launching agentos-compositor (scale=$AGENTOS_SCALE)" > /dev/kmsg 2>/dev/null
-    exec su -l agentos -c "PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR WLR_BACKENDS=drm WLR_RENDERER=gles2 LIBSEAT_BACKEND=noop XCURSOR_THEME=Adwaita XCURSOR_SIZE=$XCURSOR_SIZE AGENTOS_SCALE=$AGENTOS_SCALE /usr/local/bin/agentos-compositor 2>&1"
-else
-    echo "start-compositor: agentos-compositor not found" > /dev/kmsg 2>/dev/null
+if [ ! -x /usr/local/bin/agentos-compositor ]; then
+    kmsg "start-compositor: agentos-compositor not found"
     exit 1
 fi
+
+kmsg "start-compositor: launching agentos-compositor (scale=$AGENTOS_SCALE)"
+LOG=/tmp/agentos-compositor.log
+: > "$LOG"
+chown "$AGENTOS_UID:$AGENTOS_GID" "$LOG" 2>/dev/null || true
+
+setpriv \
+    --reuid "$AGENTOS_UID" \
+    --regid "$AGENTOS_GID" \
+    --init-groups \
+    env \
+    PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin \
+    HOME=/home/agentos \
+    XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
+    WLR_BACKENDS=drm \
+    WLR_RENDERER=gles2 \
+    LIBSEAT_BACKEND=noop \
+    SMITHAY_USE_LEGACY=1 \
+    XCURSOR_THEME=Adwaita \
+    XCURSOR_SIZE="$XCURSOR_SIZE" \
+    AGENTOS_SCALE="$AGENTOS_SCALE" \
+    AGENTOS_HOST_CURSOR=1 \
+    AGENTOS_INPUT_DEBUG=1 \
+    $DEBUG_SKIP_CLIENT_SURFACES \
+    RUST_BACKTRACE=1 \
+    RUST_LOG=info \
+    /usr/local/bin/agentos-compositor > "$LOG" 2>&1 &
+COMPOSITOR_PID=$!
+
+(
+    tail -n +1 -f "$LOG" 2>/dev/null | while IFS= read -r line; do
+        kmsg "compositor: $line"
+    done
+) &
+TAIL_PID=$!
+
+wait "$COMPOSITOR_PID"
+STATUS=$?
+kill "$TAIL_PID" 2>/dev/null || true
+exit "$STATUS"

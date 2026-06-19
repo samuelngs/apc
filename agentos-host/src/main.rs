@@ -28,7 +28,10 @@ pub struct Cli {
     disk: Option<PathBuf>,
 
     /// Kernel command line
-    #[arg(long, default_value = "console=ttyAMA0 root=/dev/vda rootfstype=ext4 modules=virtio_mmio,virtio_blk,virtio_input rw")]
+    #[arg(
+        long,
+        default_value = "console=ttyAMA0 root=/dev/vda rootfstype=ext4 modules=virtio_mmio,virtio_blk,virtio_input rw"
+    )]
     cmdline: String,
 
     /// Number of CPUs

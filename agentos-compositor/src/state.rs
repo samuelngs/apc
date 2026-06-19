@@ -4,53 +4,56 @@ use anyhow::{Context, Result};
 #[cfg(target_os = "linux")]
 use smithay::{
     backend::{
-        allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice},
-        drm::{
-            DrmDevice, DrmDeviceFd, DrmEvent, DrmNode, DrmSurface,
-            exporter::gbm::GbmFramebufferExporter,
-        },
-        egl::{EGLContext, EGLDisplay},
+        allocator::dumb::DumbAllocator,
+        drm::{DrmDevice, DrmDeviceFd, DrmEvent, DrmSurface},
+        input::{Device, DeviceCapability, InputEvent},
         libinput::{LibinputInputBackend, LibinputSessionInterface},
         renderer::{
-            element::memory::MemoryRenderBuffer,
-            gles::GlesRenderer,
-            utils::on_commit_buffer_handler,
             ImportDma,
+            element::{Id, memory::MemoryRenderBuffer},
+            pixman::PixmanRenderer,
+            utils::on_commit_buffer_handler,
         },
-        session::{libseat::LibSeatSession, Event as SessionEvent, Session},
+        session::{Event as SessionEvent, Session, libseat::LibSeatSession},
         udev::{self, UdevBackend},
     },
     desktop::{
-        PopupManager, PopupKind, PopupKeyboardGrab, PopupPointerGrab,
-        find_popup_root_surface, get_popup_toplevel_coords,
-        space::Space, Window,
+        PopupKeyboardGrab, PopupKind, PopupManager, PopupPointerGrab, Window,
+        find_popup_root_surface, get_popup_toplevel_coords, space::Space,
     },
     input::{
+        Seat, SeatHandler, SeatState,
         keyboard::XkbConfig,
         pointer::{CursorImageStatus, Focus, GrabStartData, PointerHandle},
-        Seat, SeatHandler, SeatState,
     },
     output::{Mode as OutputMode, Output, PhysicalProperties, Subpixel},
     reexports::{
-        calloop::{generic::Generic, EventLoop, Interest, LoopSignal, Mode, PostAction},
+        calloop::{
+            EventLoop, Interest, LoopSignal, Mode, PostAction,
+            generic::Generic,
+            timer::{TimeoutAction, Timer},
+        },
         input::Libinput,
         wayland_server::{
+            Client, Display,
             backend::{ClientData, ClientId, DisconnectReason},
             protocol::{wl_buffer::WlBuffer, wl_seat::WlSeat, wl_surface::WlSurface},
-            Client, Display,
         },
     },
-    utils::{DeviceFd, Logical, Point, Rectangle, Serial, Size, Transform},
+    utils::{DeviceFd, Logical, Point, Rectangle, SERIAL_COUNTER, Serial, Size, Transform},
     wayland::{
         buffer::BufferHandler,
-        compositor::{self, get_parent, is_sync_subsurface, CompositorClientState, CompositorHandler, CompositorState},
+        compositor::{
+            self, CompositorClientState, CompositorHandler, CompositorState, get_parent,
+            is_sync_subsurface,
+        },
         output::OutputHandler,
         output::OutputManagerState,
         selection::{
+            SelectionHandler,
             data_device::{
                 ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
             },
-            SelectionHandler,
         },
         shell::xdg::{
             PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
@@ -64,6 +67,7 @@ use smithay::{
 #[cfg(target_os = "linux")]
 use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 
+#[cfg(target_os = "linux")]
 use std::{
     collections::HashSet,
     os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd},
@@ -72,7 +76,7 @@ use std::{
 };
 
 #[cfg(target_os = "linux")]
-use drm::control::{connector, Device as ControlDevice};
+use drm::control::{Device as ControlDevice, connector};
 
 #[cfg(target_os = "linux")]
 use drm_fourcc::DrmFourcc;
@@ -85,8 +89,8 @@ use crate::input::CursorShape;
 
 #[cfg(target_os = "linux")]
 use crate::render::{
-    GbmDrmCompositor, RedrawState,
-    create_solid_buffer, queue_redraw, render_frame, taskbar_height,
+    RedrawState, SoftwareDrmCompositor, create_solid_buffer, queue_redraw, render_frame,
+    send_frame_callbacks, taskbar_height,
 };
 
 #[cfg(target_os = "linux")]
@@ -131,8 +135,8 @@ pub(crate) struct AgentCompositor {
     pub(crate) pointer: PointerHandle<Self>,
 
     pub(crate) session: LibSeatSession,
-    pub(crate) renderer: GlesRenderer,
-    pub(crate) drm_compositor: GbmDrmCompositor,
+    pub(crate) renderer: PixmanRenderer,
+    pub(crate) drm_compositor: SoftwareDrmCompositor,
     pub(crate) drm_device: DrmDevice,
 
     pub(crate) cursor_default: crate::cursor::LoadedCursor,
@@ -141,17 +145,24 @@ pub(crate) struct AgentCompositor {
     pub(crate) cursor_resize_ns: crate::cursor::LoadedCursor,
     pub(crate) cursor_resize_ew: crate::cursor::LoadedCursor,
     pub(crate) cursor_shape: CursorShape,
+    pub(crate) legacy_cursor: Option<crate::cursor::LegacyHardwareCursor>,
     pub(crate) redraw_state: RedrawState,
+    pub(crate) last_render_at: Instant,
 
     pub(crate) taskbar_bg: MemoryRenderBuffer,
     pub(crate) taskbar_buttons: Vec<(String, bool, bool, MemoryRenderBuffer)>,
+    pub(crate) taskbar_bg_id: Id,
+    pub(crate) taskbar_button_ids: Vec<Id>,
+    pub(crate) ssd_titlebar_ids: Vec<(Window, Id)>,
+    pub(crate) ssd_titlebar_buffers: Vec<(Window, String, i32, MemoryRenderBuffer)>,
 
     pub(crate) popup_manager: PopupManager,
     pub(crate) minimized_windows: Vec<(Window, Point<i32, Logical>)>,
     pub(crate) window_order: Vec<Window>,
 
     pub(crate) scale_factor: i32,
-    pub(crate) ssd_windows: HashSet<smithay::reexports::wayland_server::protocol::wl_surface::WlSurface>,
+    pub(crate) ssd_windows:
+        HashSet<smithay::reexports::wayland_server::protocol::wl_surface::WlSurface>,
 
     pub(crate) wayland_display: String,
     pub(crate) mcp_tx: calloop::channel::Sender<crate::mcp::McpCommand>,
@@ -167,8 +178,36 @@ pub(crate) struct CalloopData {
 
 #[cfg(target_os = "linux")]
 impl AgentCompositor {
+    pub(crate) fn render_software_cursor(&self) -> bool {
+        std::env::var_os("AGENTOS_HOST_CURSOR").is_none() && self.legacy_cursor.is_none()
+    }
+
+    pub(crate) fn sync_legacy_cursor(&mut self) {
+        let Some(cursor) = self.legacy_cursor.as_mut() else {
+            return;
+        };
+
+        let location = self.pointer.current_location();
+        if let Err(e) = cursor.move_to(&self.drm_device, location, self.scale_factor) {
+            tracing::warn!(%e, "legacy hardware cursor failed, falling back to software cursor");
+            self.legacy_cursor = None;
+            queue_redraw(self);
+        }
+    }
+
+    pub(crate) fn finish_pointer_motion(&mut self) {
+        self.sync_legacy_cursor();
+        if self.render_software_cursor() {
+            queue_redraw(self);
+        }
+    }
+
     fn popup_target_rect(&self, surface: &PopupSurface) -> Rectangle<i32, Logical> {
-        let output_size = self.output.current_mode().map(|m| m.size).unwrap_or((1920, 1080).into());
+        let output_size = self
+            .output
+            .current_mode()
+            .map(|m| m.size)
+            .unwrap_or((1920, 1080).into());
         let s = self.scale_factor;
         let logical_w = output_size.w / s;
         let logical_h = output_size.h / s;
@@ -180,7 +219,10 @@ impl AgentCompositor {
             .ok()
             .and_then(|root| {
                 self.space.elements().find_map(|w| {
-                    let is_root = w.toplevel().map(|t| t.wl_surface() == &root).unwrap_or(false);
+                    let is_root = w
+                        .toplevel()
+                        .map(|t| t.wl_surface() == &root)
+                        .unwrap_or(false);
                     if is_root {
                         self.space.element_location(w)
                     } else {
@@ -193,7 +235,8 @@ impl AgentCompositor {
         let parent_global: Point<i32, Logical> = (
             toplevel_loc.x + popup_offset.x,
             toplevel_loc.y + popup_offset.y,
-        ).into();
+        )
+            .into();
 
         Rectangle::new(
             (-parent_global.x, -parent_global.y).into(),
@@ -202,7 +245,8 @@ impl AgentCompositor {
     }
 
     pub(crate) fn is_ssd(&self, window: &Window) -> bool {
-        window.toplevel()
+        window
+            .toplevel()
             .map(|t| self.ssd_windows.contains(t.wl_surface()))
             .unwrap_or(false)
     }
@@ -294,11 +338,11 @@ impl CompositorHandler for AgentCompositor {
             while let Some(parent) = get_parent(&root) {
                 root = parent;
             }
-            if let Some(window) = self
-                .space
-                .elements()
-                .find(|w| w.toplevel().map(|t| t.wl_surface() == &root).unwrap_or(false))
-            {
+            if let Some(window) = self.space.elements().find(|w| {
+                w.toplevel()
+                    .map(|t| t.wl_surface() == &root)
+                    .unwrap_or(false)
+            }) {
                 window.on_commit();
             }
         }
@@ -315,7 +359,11 @@ impl XdgShellHandler for AgentCompositor {
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
         let s = self.scale_factor;
-        let output_size = self.output.current_mode().map(|m| m.size).unwrap_or((1920, 1080).into());
+        let output_size = self
+            .output
+            .current_mode()
+            .map(|m| m.size)
+            .unwrap_or((1920, 1080).into());
         let logical_w = output_size.w as i32 / s;
         let logical_h = output_size.h as i32 / s;
         let taskbar_h = taskbar_height(1);
@@ -329,11 +377,16 @@ impl XdgShellHandler for AgentCompositor {
         surface.with_pending_state(|s| {
             s.size = Some((win_w, win_h).into());
         });
+        let focus_surface = surface.wl_surface().clone();
         surface.send_configure();
         let window = Window::new_wayland_window(surface);
-        self.space.map_element(window.clone(), (x, y), false);
+        self.space.map_element(window.clone(), (x, y), true);
         self.window_order.push(window);
-        tracing::info!("new toplevel window mapped");
+        if let Some(keyboard) = self.seat.get_keyboard() {
+            keyboard.set_focus(self, Some(focus_surface), SERIAL_COUNTER.next_serial());
+        }
+        queue_redraw(self);
+        tracing::info!("new toplevel window mapped and focused");
     }
 
     fn move_request(&mut self, surface: ToplevelSurface, _seat: WlSeat, serial: Serial) {
@@ -384,10 +437,7 @@ impl XdgShellHandler for AgentCompositor {
 
         if let Some(window) = window {
             let initial_loc = self.space.element_location(&window).unwrap_or_default();
-            let initial_size = surface
-                .current_state()
-                .size
-                .unwrap_or((800, 600).into());
+            let initial_size = surface.current_state().size.unwrap_or((800, 600).into());
             let start_data = GrabStartData {
                 focus: None,
                 button: 0x110,
@@ -476,7 +526,10 @@ impl XdgShellHandler for AgentCompositor {
         while let Some(parent) = compositor::get_parent(&root) {
             root = parent;
         }
-        if let Ok(grab) = self.popup_manager.grab_popup::<AgentCompositor>(root, kind, &seat, serial) {
+        if let Ok(grab) = self
+            .popup_manager
+            .grab_popup::<AgentCompositor>(root, kind, &seat, serial)
+        {
             let keyboard = seat.get_keyboard().unwrap();
             let pointer = seat.get_pointer().unwrap();
             let kb_grab = PopupKeyboardGrab::new(&grab);
@@ -525,14 +578,24 @@ impl XdgDecorationHandler for AgentCompositor {
         toplevel.send_configure();
         let surface = toplevel.wl_surface().clone();
         if self.ssd_windows.insert(surface.clone()) {
-            let win_and_loc: Option<(Window, Point<i32, Logical>)> = self.space.elements()
-                .find(|w| w.toplevel().map(|t| t.wl_surface() == &surface).unwrap_or(false))
+            let win_and_loc: Option<(Window, Point<i32, Logical>)> = self
+                .space
+                .elements()
+                .find(|w| {
+                    w.toplevel()
+                        .map(|t| t.wl_surface() == &surface)
+                        .unwrap_or(false)
+                })
                 .map(|w| {
                     let loc = self.space.element_location(w).unwrap_or_default();
                     (w.clone(), loc)
                 });
             if let Some((window, loc)) = win_and_loc {
-                self.space.map_element(window, (loc.x, loc.y + crate::render::SSD_TITLE_BAR_HEIGHT), true);
+                self.space.map_element(
+                    window,
+                    (loc.x, loc.y + crate::render::SSD_TITLE_BAR_HEIGHT),
+                    true,
+                );
             }
         }
     }
@@ -545,14 +608,24 @@ impl XdgDecorationHandler for AgentCompositor {
         let surface = toplevel.wl_surface().clone();
         if mode == DecorationMode::ClientSide {
             if self.ssd_windows.remove(&surface) {
-                let win_and_loc: Option<(Window, Point<i32, Logical>)> = self.space.elements()
-                    .find(|w| w.toplevel().map(|t| t.wl_surface() == &surface).unwrap_or(false))
+                let win_and_loc: Option<(Window, Point<i32, Logical>)> = self
+                    .space
+                    .elements()
+                    .find(|w| {
+                        w.toplevel()
+                            .map(|t| t.wl_surface() == &surface)
+                            .unwrap_or(false)
+                    })
                     .map(|w| {
                         let loc = self.space.element_location(w).unwrap_or_default();
                         (w.clone(), loc)
                     });
                 if let Some((window, loc)) = win_and_loc {
-                    self.space.map_element(window, (loc.x, loc.y - crate::render::SSD_TITLE_BAR_HEIGHT), true);
+                    self.space.map_element(
+                        window,
+                        (loc.x, loc.y - crate::render::SSD_TITLE_BAR_HEIGHT),
+                        true,
+                    );
                 }
             }
         } else {
@@ -637,26 +710,14 @@ smithay::delegate_xdg_decoration!(AgentCompositor);
 pub fn run() -> Result<()> {
     let (mut session, session_notifier) =
         LibSeatSession::new().context("failed to create libseat session")?;
-    tracing::info!(seat = %session.seat(), "session opened");
+    let seat_name = session.seat();
+    tracing::info!(seat = %seat_name, "session opened");
 
     let mut event_loop: EventLoop<CalloopData> = EventLoop::try_new()?;
     let loop_handle = event_loop.handle();
 
-    loop_handle
-        .insert_source(session_notifier, |event, _, data| match event {
-            SessionEvent::ActivateSession => {
-                tracing::info!("session activated");
-                let _ = data.state.drm_device.activate(false);
-            }
-            SessionEvent::PauseSession => {
-                tracing::info!("session paused");
-                data.state.drm_device.pause();
-            }
-        })
-        .map_err(|e| anyhow::anyhow!("session source: {}", e.error))?;
-
-    let udev_backend = UdevBackend::new(&session.seat()).context("udev backend")?;
-    let gpu_path = udev::primary_gpu(&session.seat())
+    let udev_backend = UdevBackend::new(&seat_name).context("udev backend")?;
+    let gpu_path = udev::primary_gpu(&seat_name)
         .ok()
         .flatten()
         .or_else(|| {
@@ -679,9 +740,7 @@ pub fn run() -> Result<()> {
     let (mut drm_device, drm_notifier) =
         DrmDevice::new(device_fd.clone(), true).context("DRM device init")?;
 
-    let res = drm_device
-        .resource_handles()
-        .context("DRM resources")?;
+    let res = drm_device.resource_handles().context("DRM resources")?;
     let (connector_handle, mode) = res
         .connectors()
         .iter()
@@ -708,21 +767,10 @@ pub fn run() -> Result<()> {
 
     let surface: DrmSurface = drm_device.create_surface(crtc, mode, &[connector_handle])?;
 
-    let gbm_device = GbmDevice::new(device_fd.clone()).context("GBM device")?;
-    let allocator = GbmAllocator::new(
-        gbm_device.clone(),
-        GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT,
-    );
-
-    let egl_display =
-        unsafe { EGLDisplay::new(gbm_device.clone()) }.context("EGL display")?;
-    let egl_context = EGLContext::new(&egl_display).context("EGL context")?;
-    let renderer = unsafe { GlesRenderer::new(egl_context) }.context("GLES renderer")?;
-
+    let allocator = DumbAllocator::new(device_fd.clone());
+    let renderer = PixmanRenderer::new().context("Pixman renderer")?;
     let renderer_formats: HashSet<_> = renderer.dmabuf_formats().into_iter().collect();
-
-    let drm_node = DrmNode::from_file(device_fd.clone()).ok();
-    let exporter = GbmFramebufferExporter::new(gbm_device.clone(), drm_node);
+    let exporter = device_fd.clone();
 
     let output = Output::new(
         "Virtual-1".to_string(),
@@ -762,56 +810,58 @@ pub fn run() -> Result<()> {
         color_formats,
         renderer_formats,
         drm_device.cursor_size(),
-        Some(gbm_device.clone()),
+        None,
     )
     .context("DRM compositor")?;
 
     loop_handle
         .insert_source(drm_notifier, |event, _, data| match event {
             DrmEvent::VBlank(_crtc) => {
-                if let Err(e) = data.state.drm_compositor.frame_submitted() {
-                    tracing::error!("frame_submitted failed: {e}");
+                if let RedrawState::WaitingForVBlank { redraw_needed, .. } =
+                    std::mem::replace(&mut data.state.redraw_state, RedrawState::Idle)
+                {
+                    if let Err(e) = data.state.drm_compositor.frame_submitted() {
+                        tracing::error!("frame_submitted failed: {e}");
+                    }
+                    send_frame_callbacks(&mut data.state);
+                    if redraw_needed {
+                        queue_redraw(&mut data.state);
+                    }
                 }
-                let redraw_needed = match data.state.redraw_state {
-                    RedrawState::WaitingForVBlank { redraw_needed } => redraw_needed,
-                    _ => false,
-                };
-                data.state.redraw_state = RedrawState::Idle;
-                if redraw_needed {
-                    queue_redraw(&mut data.state);
-                }
-                let time = data.state.start_time.elapsed();
-                let output = &data.state.output;
-                data.state.space.elements().for_each(|window| {
-                    window.send_frame(output, time, Some(Duration::ZERO), |_, _| {
-                        Some(output.clone())
-                    });
-                });
             }
             DrmEvent::Error(e) => tracing::error!("DRM error: {e}"),
         })
         .map_err(|e| anyhow::anyhow!("drm source: {}", e.error))?;
 
-    let mut libinput_context =
-        Libinput::new_from_path(LibinputSessionInterface::from(session.clone()));
-    for entry in std::fs::read_dir("/dev/input").into_iter().flatten() {
-        if let Ok(entry) = entry {
-            let path = entry.path();
-            if path.file_name().map(|n| n.to_string_lossy().starts_with("event")).unwrap_or(false) {
-                if let Some(path_str) = path.to_str() {
-                    let _ = libinput_context.path_add_device(path_str);
-                    tracing::info!("added input device: {}", path_str);
-                }
-            }
-        }
-    }
-    let libinput_backend = LibinputInputBackend::new(libinput_context);
-
     loop_handle
-        .insert_source(libinput_backend, |event, _, data| {
-            crate::input::handle_input(&mut data.state, event);
-        })
-        .map_err(|e| anyhow::anyhow!("libinput source: {}", e.error))?;
+        .insert_source(
+            Timer::from_duration(Duration::from_millis(16)),
+            |_, _, data: &mut CalloopData| {
+                let timed_out = match data.state.redraw_state {
+                    RedrawState::WaitingForVBlank { submitted_at, .. } => {
+                        submitted_at.elapsed() >= Duration::from_millis(33)
+                    }
+                    _ => false,
+                };
+
+                if timed_out {
+                    if let RedrawState::WaitingForVBlank { redraw_needed, .. } =
+                        std::mem::replace(&mut data.state.redraw_state, RedrawState::Idle)
+                    {
+                        if let Err(e) = data.state.drm_compositor.frame_submitted() {
+                            tracing::warn!("frame_submitted watchdog failed: {e}");
+                        }
+                        send_frame_callbacks(&mut data.state);
+                        if redraw_needed {
+                            queue_redraw(&mut data.state);
+                        }
+                    }
+                }
+
+                TimeoutAction::ToDuration(Duration::from_millis(16))
+            },
+        )
+        .map_err(|e| anyhow::anyhow!("redraw watchdog source: {}", e.error))?;
 
     let mut display = Display::<AgentCompositor>::new()?;
     let dh = display.handle();
@@ -822,14 +872,49 @@ pub fn run() -> Result<()> {
     let shm_state = ShmState::new::<AgentCompositor>(&dh, vec![]);
     let mut seat_state = SeatState::<AgentCompositor>::new();
     let data_device_state = DataDeviceState::new::<AgentCompositor>(&dh);
-    let output_manager_state =
-        OutputManagerState::new_with_xdg_output::<AgentCompositor>(&dh);
+    let output_manager_state = OutputManagerState::new_with_xdg_output::<AgentCompositor>(&dh);
 
     let _output_global = output.create_global::<AgentCompositor>(&dh);
 
-    let mut seat = seat_state.new_wl_seat(&dh, "seat-0");
+    let mut seat = seat_state.new_wl_seat(&dh, &seat_name);
     let _keyboard = seat.add_keyboard(XkbConfig::default(), 200, 25)?;
     let pointer = seat.add_pointer();
+
+    let mut libinput_context =
+        Libinput::new_with_udev::<LibinputSessionInterface<LibSeatSession>>(session.clone().into());
+    libinput_context
+        .udev_assign_seat(&seat_name)
+        .map_err(|_| anyhow::anyhow!("failed to assign libinput seat {seat_name}"))?;
+    if !session.is_active() {
+        tracing::info!("session inactive at startup; suspending libinput until activation");
+        libinput_context.suspend();
+    }
+    let libinput_backend = LibinputInputBackend::new(libinput_context.clone());
+
+    loop_handle
+        .insert_source(libinput_backend, |event, _, data| {
+            log_libinput_device_event(&event);
+            crate::input::handle_input(&mut data.state, event);
+        })
+        .map_err(|e| anyhow::anyhow!("libinput source: {}", e.error))?;
+    tracing::info!(%seat_name, "libinput backend initialized");
+
+    loop_handle
+        .insert_source(session_notifier, move |event, _, data| match event {
+            SessionEvent::ActivateSession => {
+                tracing::info!("session activated");
+                if let Err(e) = libinput_context.resume() {
+                    tracing::warn!(?e, "failed to resume libinput");
+                }
+                let _ = data.state.drm_device.activate(false);
+            }
+            SessionEvent::PauseSession => {
+                tracing::info!("session paused");
+                libinput_context.suspend();
+                data.state.drm_device.pause();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("session source: {}", e.error))?;
 
     let socket = ListeningSocketSource::new_auto().context("wayland socket")?;
     let socket_name = socket
@@ -870,8 +955,21 @@ pub fn run() -> Result<()> {
     let cursor_resize_nesw = cursor_theme.load_cursor("top_right_corner");
     let cursor_resize_ns = cursor_theme.load_cursor("sb_v_double_arrow");
     let cursor_resize_ew = cursor_theme.load_cursor("sb_h_double_arrow");
+    let legacy_cursor = if std::env::var_os("AGENTOS_USE_LEGACY_HARDWARE_CURSOR").is_some() {
+        crate::cursor::LegacyHardwareCursor::new(&drm_device, crtc, scale_factor)
+    } else {
+        None
+    };
     let output_w = mode_size.0 as i32;
-    let taskbar_bg = create_solid_buffer(output_w, crate::render::taskbar_height(scale_factor), 30, 30, 30, 255, scale_factor);
+    let taskbar_bg = create_solid_buffer(
+        output_w,
+        crate::render::taskbar_height(scale_factor),
+        30,
+        30,
+        30,
+        255,
+        scale_factor,
+    );
 
     let (_mcp, mcp_tx) = crate::mcp::start(loop_handle.clone())?;
 
@@ -899,9 +997,15 @@ pub fn run() -> Result<()> {
         cursor_resize_ns,
         cursor_resize_ew,
         cursor_shape: CursorShape::Default,
+        legacy_cursor,
         redraw_state: RedrawState::Idle,
+        last_render_at: Instant::now() - Duration::from_millis(16),
         taskbar_bg,
         taskbar_buttons: Vec::new(),
+        taskbar_bg_id: Id::new(),
+        taskbar_button_ids: Vec::new(),
+        ssd_titlebar_ids: Vec::new(),
+        ssd_titlebar_buffers: Vec::new(),
         popup_manager: PopupManager::default(),
         minimized_windows: Vec::new(),
         window_order: Vec::new(),
@@ -916,15 +1020,14 @@ pub fn run() -> Result<()> {
     let wayland_display = socket_name.clone();
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(500));
-        let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| {
-            format!("/run/user/{}", unsafe { libc::getuid() })
-        });
+        let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR")
+            .unwrap_or_else(|_| format!("/run/user/{}", unsafe { libc::getuid() }));
         let env_vars: Vec<(&str, &str)> = vec![
             ("WAYLAND_DISPLAY", wayland_display.as_str()),
             ("XDG_RUNTIME_DIR", xdg_runtime_dir.as_str()),
             ("TERM", "xterm-256color"),
         ];
-        for cmd in &["alacritty"] {
+        for cmd in &["foot"] {
             tracing::info!(cmd, "attempting to launch terminal");
             let result = std::process::Command::new(cmd)
                 .envs(env_vars.iter().cloned())
@@ -947,11 +1050,35 @@ pub fn run() -> Result<()> {
     tracing::info!("compositor initialized, entering event loop");
     event_loop.run(None, &mut calloop_data, |data| {
         data.state.space.refresh();
-        if matches!(data.state.redraw_state, RedrawState::Queued) {
+        if matches!(data.state.redraw_state, RedrawState::Queued)
+            && data.state.last_render_at.elapsed() >= Duration::from_millis(16)
+        {
             render_frame(&mut data.state);
         }
         data.display.flush_clients().unwrap();
     })?;
 
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn log_libinput_device_event(event: &InputEvent<LibinputInputBackend>) {
+    match event {
+        InputEvent::DeviceAdded { device } => {
+            tracing::info!(
+                id = %device.id(),
+                name = %device.name(),
+                keyboard = device.has_capability(DeviceCapability::Keyboard.into()),
+                pointer = device.has_capability(DeviceCapability::Pointer.into()),
+                touch = device.has_capability(DeviceCapability::Touch.into()),
+                tablet_tool = device.has_capability(DeviceCapability::TabletTool.into()),
+                tablet_pad = device.has_capability(DeviceCapability::TabletPad.into()),
+                "libinput device added"
+            );
+        }
+        InputEvent::DeviceRemoved { device } => {
+            tracing::info!(id = %device.id(), name = %device.name(), "libinput device removed");
+        }
+        _ => {}
+    }
 }

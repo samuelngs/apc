@@ -1,9 +1,11 @@
 #[cfg(target_os = "linux")]
+use std::sync::atomic::{AtomicU64, Ordering};
+
+#[cfg(target_os = "linux")]
 use smithay::{
     backend::input::{
-        AbsolutePositionEvent, Axis, Event, InputEvent, KeyboardKeyEvent,
-        PointerAxisEvent, PointerButtonEvent,
-        PointerMotionEvent as PointerMotionEventTrait,
+        AbsolutePositionEvent, Axis, Event, InputEvent, KeyboardKeyEvent, PointerAxisEvent,
+        PointerButtonEvent, PointerMotionEvent as PointerMotionEventTrait,
     },
     backend::libinput::LibinputInputBackend,
     desktop::{Window, WindowSurfaceType},
@@ -15,15 +17,34 @@ use smithay::{
 };
 
 #[cfg(target_os = "linux")]
-use super::grabs::ResizeSurfaceGrab;
-
-#[cfg(target_os = "linux")]
-use super::render::{queue_redraw, taskbar_height, taskbar_btn_width, taskbar_btn_gap, taskbar_btn_margin, SSD_TITLE_BAR_HEIGHT};
+use super::render::{
+    SSD_TITLE_BAR_HEIGHT, queue_redraw, taskbar_btn_gap, taskbar_btn_margin, taskbar_btn_width,
+    taskbar_height,
+};
 #[cfg(target_os = "linux")]
 use super::state::AgentCompositor;
 
 #[cfg(target_os = "linux")]
 const RESIZE_EDGE_THRESHOLD: f64 = 8.0;
+
+#[cfg(target_os = "linux")]
+fn input_debug_enabled() -> bool {
+    std::env::var_os("AGENTOS_INPUT_DEBUG").is_some()
+}
+
+#[cfg(target_os = "linux")]
+fn should_log_input(counter: &AtomicU64) -> Option<u64> {
+    if !input_debug_enabled() {
+        return None;
+    }
+
+    let count = counter.fetch_add(1, Ordering::Relaxed) + 1;
+    if count <= 20 || count % 120 == 0 {
+        Some(count)
+    } else {
+        None
+    }
+}
 
 #[cfg(target_os = "linux")]
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -59,9 +80,11 @@ pub(crate) fn minimize_window(state: &mut AgentCompositor, window: &Window) {
     state.space.unmap_elem(window);
     state.minimized_windows.push((window.clone(), loc));
     if let Some(keyboard) = state.seat.get_keyboard() {
-        let next_focus = state.space.elements().next().and_then(|w| {
-            w.toplevel().map(|t| t.wl_surface().clone())
-        });
+        let next_focus = state
+            .space
+            .elements()
+            .next()
+            .and_then(|w| w.toplevel().map(|t| t.wl_surface().clone()));
         keyboard.set_focus(state, next_focus, SERIAL_COUNTER.next_serial());
     }
     queue_redraw(state);
@@ -146,10 +169,18 @@ pub(crate) fn detect_resize_edge(
 
         if on_left || on_right || on_top || on_bottom {
             let mut edges = 0u32;
-            if on_top { edges |= 1; }
-            if on_bottom { edges |= 2; }
-            if on_left { edges |= 4; }
-            if on_right { edges |= 8; }
+            if on_top {
+                edges |= 1;
+            }
+            if on_bottom {
+                edges |= 2;
+            }
+            if on_left {
+                edges |= 4;
+            }
+            if on_right {
+                edges |= 8;
+            }
             return Some(((*window).clone(), edges));
         }
 
@@ -200,8 +231,10 @@ fn ssd_hit_test(state: &AgentCompositor, location: Point<f64, Logical>) -> Optio
         let title_h = SSD_TITLE_BAR_HEIGHT as f64;
         let top_y = content_top - title_h;
 
-        if x < left_x - SSD_EDGE || x > right_x + SSD_EDGE
-            || y < top_y - SSD_EDGE || y > bottom_y + SSD_EDGE
+        if x < left_x - SSD_EDGE
+            || x > right_x + SSD_EDGE
+            || y < top_y - SSD_EDGE
+            || y > bottom_y + SSD_EDGE
         {
             continue;
         }
@@ -213,10 +246,18 @@ fn ssd_hit_test(state: &AgentCompositor, location: Point<f64, Logical>) -> Optio
 
         if on_left || on_right || on_top || on_bottom {
             let mut edges = 0u32;
-            if on_top || (y < top_y + SSD_EDGE && (on_left || on_right)) { edges |= 1; }
-            if on_bottom || (y > bottom_y - SSD_EDGE && (on_left || on_right)) { edges |= 2; }
-            if on_left { edges |= 4; }
-            if on_right { edges |= 8; }
+            if on_top || (y < top_y + SSD_EDGE && (on_left || on_right)) {
+                edges |= 1;
+            }
+            if on_bottom || (y > bottom_y - SSD_EDGE && (on_left || on_right)) {
+                edges |= 2;
+            }
+            if on_left {
+                edges |= 4;
+            }
+            if on_right {
+                edges |= 8;
+            }
             return Some(SsdHit::ResizeEdge(window.clone(), edges));
         }
 
@@ -231,6 +272,17 @@ fn ssd_hit_test(state: &AgentCompositor, location: Point<f64, Logical>) -> Optio
 pub(crate) fn handle_input(state: &mut AgentCompositor, event: InputEvent<LibinputInputBackend>) {
     match event {
         InputEvent::Keyboard { event, .. } => {
+            static KEYBOARD_EVENTS: AtomicU64 = AtomicU64::new(0);
+            if let Some(count) = should_log_input(&KEYBOARD_EVENTS) {
+                tracing::info!(
+                    count,
+                    key_code = ?event.key_code(),
+                    state = ?event.state(),
+                    time = event.time_msec(),
+                    "compositor input: keyboard"
+                );
+            }
+
             if let Some(keyboard) = state.seat.get_keyboard() {
                 keyboard.input::<(), _>(
                     state,
@@ -248,16 +300,23 @@ pub(crate) fn handle_input(state: &mut AgentCompositor, event: InputEvent<Libinp
                 let pos = event.position_transformed(geo.size);
                 let serial = SERIAL_COUNTER.next_serial();
                 let pointer = state.pointer.clone();
+                static POINTER_ABS_EVENTS: AtomicU64 = AtomicU64::new(0);
+                if let Some(count) = should_log_input(&POINTER_ABS_EVENTS) {
+                    tracing::info!(
+                        count,
+                        x = pos.x,
+                        y = pos.y,
+                        time = event.time_msec(),
+                        "compositor input: pointer absolute"
+                    );
+                }
 
                 let under = state
                     .space
                     .element_under(pos.to_f64())
                     .and_then(|(window, loc)| {
                         window
-                            .surface_under(
-                                pos.to_f64() - loc.to_f64(),
-                                WindowSurfaceType::ALL,
-                            )
+                            .surface_under(pos.to_f64() - loc.to_f64(), WindowSurfaceType::ALL)
                             .map(|(s, surf_loc)| (s, (surf_loc + loc).to_f64()))
                     });
 
@@ -277,7 +336,7 @@ pub(crate) fn handle_input(state: &mut AgentCompositor, event: InputEvent<Libinp
                 if new_shape != state.cursor_shape {
                     state.cursor_shape = new_shape;
                 }
-                queue_redraw(state);
+                state.finish_pointer_motion();
             }
         }
         InputEvent::PointerButton { event, .. } => {
@@ -285,17 +344,37 @@ pub(crate) fn handle_input(state: &mut AgentCompositor, event: InputEvent<Libinp
             let pointer = state.pointer.clone();
             let button_code = event.button_code();
             let is_left = button_code == 0x110;
+            static POINTER_BUTTON_EVENTS: AtomicU64 = AtomicU64::new(0);
+            if let Some(count) = should_log_input(&POINTER_BUTTON_EVENTS) {
+                let location = pointer.current_location();
+                tracing::info!(
+                    count,
+                    button = button_code,
+                    state = ?event.state(),
+                    x = location.x,
+                    y = location.y,
+                    time = event.time_msec(),
+                    "compositor input: pointer button"
+                );
+            }
 
             if is_left && event.state() == smithay::backend::input::ButtonState::Pressed {
                 let location = pointer.current_location();
                 let s = state.scale_factor;
-                let logical_h = state.output.current_mode().map(|m| m.size.h).unwrap_or(1080) as f64 / s as f64;
+                let logical_h = state
+                    .output
+                    .current_mode()
+                    .map(|m| m.size.h)
+                    .unwrap_or(1080) as f64
+                    / s as f64;
                 let taskbar_y = logical_h - taskbar_height(1) as f64;
 
                 if location.y >= taskbar_y {
                     let btn_x = location.x - taskbar_btn_margin(1) as f64;
                     let idx = (btn_x / (taskbar_btn_width(1) + taskbar_btn_gap(1)) as f64) as usize;
-                    let ordered: Vec<(Window, bool)> = state.window_order.iter()
+                    let ordered: Vec<(Window, bool)> = state
+                        .window_order
+                        .iter()
                         .filter_map(|w| {
                             if state.minimized_windows.iter().any(|(mw, _)| mw == w) {
                                 Some((w.clone(), true))
@@ -309,7 +388,9 @@ pub(crate) fn handle_input(state: &mut AgentCompositor, event: InputEvent<Libinp
                     if idx < ordered.len() {
                         let (window, is_minimized) = &ordered[idx];
                         if *is_minimized {
-                            let min_idx = state.minimized_windows.iter()
+                            let min_idx = state
+                                .minimized_windows
+                                .iter()
                                 .position(|(w, _)| w == window)
                                 .unwrap();
                             unminimize_window(state, min_idx);
@@ -317,9 +398,12 @@ pub(crate) fn handle_input(state: &mut AgentCompositor, event: InputEvent<Libinp
                             let is_focused = window
                                 .toplevel()
                                 .map(|t| {
-                                    state.seat.get_keyboard()
+                                    state
+                                        .seat
+                                        .get_keyboard()
                                         .and_then(|kb| kb.current_focus())
-                                        .as_ref() == Some(t.wl_surface())
+                                        .as_ref()
+                                        == Some(t.wl_surface())
                                 })
                                 .unwrap_or(false);
                             if !is_focused {
@@ -346,7 +430,8 @@ pub(crate) fn handle_input(state: &mut AgentCompositor, event: InputEvent<Libinp
                                 let surface = window.toplevel().map(|t| t.wl_surface().clone());
                                 keyboard.set_focus(state, surface, serial);
                             }
-                            let initial_loc = state.space.element_location(&window).unwrap_or_default();
+                            let initial_loc =
+                                state.space.element_location(&window).unwrap_or_default();
                             let start_data = GrabStartData {
                                 focus: None,
                                 button: 0x110,
@@ -366,8 +451,10 @@ pub(crate) fn handle_input(state: &mut AgentCompositor, event: InputEvent<Libinp
                                 let surface = window.toplevel().map(|t| t.wl_surface().clone());
                                 keyboard.set_focus(state, surface, serial);
                             }
-                            let initial_loc = state.space.element_location(&window).unwrap_or_default();
-                            let initial_size = window.toplevel()
+                            let initial_loc =
+                                state.space.element_location(&window).unwrap_or_default();
+                            let initial_size = window
+                                .toplevel()
                                 .and_then(|t| t.current_state().size)
                                 .unwrap_or((800, 600).into());
                             let start_data = GrabStartData {
@@ -391,15 +478,11 @@ pub(crate) fn handle_input(state: &mut AgentCompositor, event: InputEvent<Libinp
 
             if event.state() == smithay::backend::input::ButtonState::Pressed {
                 let location = pointer.current_location();
-                let window = state
-                    .space
-                    .element_under(location)
-                    .map(|(w, _)| w.clone());
+                let window = state.space.element_under(location).map(|(w, _)| w.clone());
                 if let Some(window) = &window {
                     state.space.raise_element(window, true);
                     if let Some(keyboard) = state.seat.get_keyboard() {
-                        let surface =
-                            window.toplevel().map(|t| t.wl_surface().clone());
+                        let surface = window.toplevel().map(|t| t.wl_surface().clone());
                         keyboard.set_focus(state, surface, serial);
                     }
                 } else if let Some(keyboard) = state.seat.get_keyboard() {
@@ -428,18 +511,24 @@ pub(crate) fn handle_input(state: &mut AgentCompositor, event: InputEvent<Libinp
                 let new_y = (current.y + dy).clamp(0.0, geo.size.h as f64 - 1.0);
                 let pos = (new_x, new_y).into();
                 let serial = SERIAL_COUNTER.next_serial();
+                static POINTER_REL_EVENTS: AtomicU64 = AtomicU64::new(0);
+                if let Some(count) = should_log_input(&POINTER_REL_EVENTS) {
+                    tracing::info!(
+                        count,
+                        dx,
+                        dy,
+                        x = new_x,
+                        y = new_y,
+                        time = event.time_msec(),
+                        "compositor input: pointer relative"
+                    );
+                }
 
-                let under = state
-                    .space
-                    .element_under(pos)
-                    .and_then(|(window, loc)| {
-                        window
-                            .surface_under(
-                                pos - loc.to_f64(),
-                                WindowSurfaceType::ALL,
-                            )
-                            .map(|(s, surf_loc)| (s, (surf_loc + loc).to_f64()))
-                    });
+                let under = state.space.element_under(pos).and_then(|(window, loc)| {
+                    window
+                        .surface_under(pos - loc.to_f64(), WindowSurfaceType::ALL)
+                        .map(|(s, surf_loc)| (s, (surf_loc + loc).to_f64()))
+                });
 
                 pointer.motion(
                     state,
@@ -457,7 +546,7 @@ pub(crate) fn handle_input(state: &mut AgentCompositor, event: InputEvent<Libinp
                 if new_shape != state.cursor_shape {
                     state.cursor_shape = new_shape;
                 }
-                queue_redraw(state);
+                state.finish_pointer_motion();
             }
         }
         InputEvent::PointerAxis { event, .. } => {
@@ -466,9 +555,9 @@ pub(crate) fn handle_input(state: &mut AgentCompositor, event: InputEvent<Libinp
             let mut frame = AxisFrame::new(event.time_msec()).source(source);
             for axis in [Axis::Vertical, Axis::Horizontal] {
                 let v120 = event.amount_v120(axis);
-                let amount = event.amount(axis).or_else(|| {
-                    v120.map(|v| v / 120.0 * 15.0)
-                });
+                let amount = event
+                    .amount(axis)
+                    .or_else(|| v120.map(|v| v / 120.0 * 15.0));
                 if let Some(val) = amount {
                     frame = frame.value(axis, val);
                 }

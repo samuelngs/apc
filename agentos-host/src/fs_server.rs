@@ -71,10 +71,7 @@ fn is_path_allowed(path: &str, patterns: &[String]) -> bool {
 }
 
 #[cfg(target_os = "macos")]
-fn handle_connection(
-    stream: UnixStream,
-    patterns: &[String],
-) -> anyhow::Result<()> {
+fn handle_connection(stream: UnixStream, patterns: &[String]) -> anyhow::Result<()> {
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut writer = BufWriter::new(stream);
     let mut root: Option<PathBuf> = None;
@@ -204,7 +201,9 @@ fn dispatch(id: u64, op: &FsOp, base: &Path) -> FsResponse {
         }
 
         FsOp::Create {
-            path, mode, flags: _,
+            path,
+            mode,
+            flags: _,
         } => {
             let full = resolve(base, path);
             match create_file(&full, *mode) {
@@ -319,11 +318,7 @@ fn errno_from(e: std::io::Error) -> i32 {
 }
 
 #[cfg(target_os = "macos")]
-fn read_file_range(
-    path: &Path,
-    offset: u64,
-    size: u32,
-) -> std::io::Result<(String, usize)> {
+fn read_file_range(path: &Path, offset: u64, size: u32) -> std::io::Result<(String, usize)> {
     use std::io::{Read, Seek, SeekFrom};
     let mut f = std::fs::File::open(path)?;
     f.seek(SeekFrom::Start(offset))?;
@@ -331,18 +326,11 @@ fn read_file_range(
     let n = f.read(&mut buf)?;
     buf.truncate(n);
     use base64::Engine;
-    Ok((
-        base64::engine::general_purpose::STANDARD.encode(&buf),
-        n,
-    ))
+    Ok((base64::engine::general_purpose::STANDARD.encode(&buf), n))
 }
 
 #[cfg(target_os = "macos")]
-fn write_file_range(
-    path: &Path,
-    offset: u64,
-    data_b64: &str,
-) -> std::io::Result<usize> {
+fn write_file_range(path: &Path, offset: u64, data_b64: &str) -> std::io::Result<usize> {
     use base64::Engine;
     use std::io::{Seek, SeekFrom, Write};
     let data = base64::engine::general_purpose::STANDARD

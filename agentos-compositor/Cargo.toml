@@ -22,6 +22,7 @@ smithay = { version = "0.7", default-features = false, features = [
     "backend_udev",
     "desktop",
     "renderer_gl",
+    "renderer_pixman",
     "wayland_frontend",
 ] }
 drm = "0.14"
