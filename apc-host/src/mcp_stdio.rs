@@ -48,6 +48,25 @@ pub fn run_stdio_proxy(socket_path: &str) -> anyhow::Result<()> {
             .unwrap_or(false);
 
         if let Some(message) = parsed_message.as_ref() {
+            match crate::mcp_host::try_handle_host_request(message) {
+                Ok(Some(crate::mcp_host::HostInterceptResponse::Response(response))) => {
+                    if let Err(e) = stdout
+                        .write_all(&response)
+                        .and_then(|_| stdout.write_all(b"\n"))
+                        .and_then(|_| stdout.flush())
+                    {
+                        tracing::error!("failed to write to stdout: {e}");
+                        break;
+                    }
+                    continue;
+                }
+                Ok(Some(crate::mcp_host::HostInterceptResponse::NoResponse)) => continue,
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::warn!(%e, "host MCP tool handling failed; forwarding to guest");
+                }
+            }
+
             match crate::mcp_capture::try_handle_screen_capture(message) {
                 Ok(Some(crate::mcp_capture::InterceptedResponse::Response(response))) => {
                     if let Err(e) = stdout
@@ -94,10 +113,25 @@ pub fn run_stdio_proxy(socket_path: &str) -> anyhow::Result<()> {
             }
         }
 
+        let response_bytes = if let Some(message) = parsed_message.as_ref() {
+            match crate::mcp_host::augment_tools_list_response(
+                message,
+                response.as_bytes().to_vec(),
+            ) {
+                Ok(response) => response,
+                Err(e) => {
+                    tracing::warn!(%e, "failed to augment MCP tools/list response");
+                    response.as_bytes().to_vec()
+                }
+            }
+        } else {
+            response.as_bytes().to_vec()
+        };
+
         if let Err(e) = stdout
-            .write_all(response.as_bytes())
+            .write_all(&response_bytes)
             .and_then(|_| {
-                if !response.ends_with('\n') {
+                if !response_bytes.ends_with(b"\n") {
                     stdout.write_all(b"\n")
                 } else {
                     Ok(())

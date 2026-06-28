@@ -237,6 +237,8 @@ pub fn create_headless_backend() -> KrunDisplayBackend {
 pub fn run(config: VmConfig) -> Result<()> {
     let mcp_socket_path = format!("/tmp/apc-mcp-{}.sock", std::process::id());
     let fs_socket_path = format!("/tmp/apc-fs-{}.sock", std::process::id());
+    let _ = std::fs::remove_file(&mcp_socket_path);
+    let _ = std::fs::remove_file(&fs_socket_path);
 
     let (ctx, slirp_fd) = vm::krun::configure_vm(&config, &mcp_socket_path, &fs_socket_path)?;
 

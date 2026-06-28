@@ -222,6 +222,13 @@ fn forward_one_message(
     socket_path: &str,
     message: serde_json::Value,
 ) -> anyhow::Result<Option<Vec<u8>>> {
+    if let Some(response) = crate::mcp_host::try_handle_host_request(&message)? {
+        return match response {
+            crate::mcp_host::HostInterceptResponse::Response(body) => Ok(Some(body)),
+            crate::mcp_host::HostInterceptResponse::NoResponse => Ok(None),
+        };
+    }
+
     if let Some(response) = crate::mcp_capture::try_handle_screen_capture(&message)? {
         return match response {
             crate::mcp_capture::InterceptedResponse::Response(body) => Ok(Some(body)),
@@ -231,7 +238,10 @@ fn forward_one_message(
 
     let expect_response = message.get("id").is_some();
     let body = serde_json::to_vec(&message)?;
-    forward_to_guest(socket_path, &body, expect_response)
+    let response = forward_to_guest(socket_path, &body, expect_response)?;
+    response
+        .map(|body| crate::mcp_host::augment_tools_list_response(&message, body))
+        .transpose()
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]

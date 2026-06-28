@@ -6,6 +6,7 @@ pub mod input;
 mod krun_ffi;
 pub mod mcp;
 mod mcp_capture;
+mod mcp_host;
 pub mod mcp_http;
 pub mod mcp_stdio;
 pub mod slirp;

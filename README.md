@@ -88,6 +88,7 @@ target/release/apc-host \
 | `file_write` | Write bytes to a guest file |
 | `fs_mount` | Mount a host directory into the guest, defaulting to `/home/agent/workspace` |
 | `fs_unmount` | Unmount a FUSE-mounted guest path |
+| `vm_reboot` | Reboot the APC microVM by restarting the host VM process |
 
 ### Browser
 
