@@ -1,23 +1,23 @@
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use apc_protocol::fs::*;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::io::{BufReader, BufWriter};
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::os::unix::fs::MetadataExt;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::os::unix::net::UnixStream;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::path::{Path, PathBuf};
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::sync::Arc;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub struct FsServer {
     socket_path: String,
     allow_patterns: Arc<Vec<String>>,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 impl FsServer {
     pub fn new(socket_path: &str, allow_patterns: Vec<String>) -> Self {
         Self {
@@ -51,7 +51,7 @@ impl FsServer {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn is_path_allowed(path: &str, patterns: &[String]) -> bool {
     if patterns.iter().any(|p| p == "*") {
         return true;
@@ -70,7 +70,7 @@ fn is_path_allowed(path: &str, patterns: &[String]) -> bool {
     })
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn handle_connection(stream: UnixStream, patterns: &[String]) -> anyhow::Result<()> {
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut writer = BufWriter::new(stream);
@@ -110,7 +110,7 @@ fn handle_connection(stream: UnixStream, patterns: &[String]) -> anyhow::Result<
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn resolve(base: &Path, rel: &str) -> PathBuf {
     if rel.is_empty() || rel == "." || rel == "/" {
         return base.to_path_buf();
@@ -119,7 +119,7 @@ fn resolve(base: &Path, rel: &str) -> PathBuf {
     base.join(rel)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn dispatch(id: u64, op: &FsOp, base: &Path) -> FsResponse {
     match op {
         FsOp::Init { .. } => unreachable!(),
@@ -297,7 +297,7 @@ fn dispatch(id: u64, op: &FsOp, base: &Path) -> FsResponse {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn meta_to_attr(m: &std::fs::Metadata) -> FileAttr {
     FileAttr {
         size: m.len(),
@@ -312,12 +312,12 @@ fn meta_to_attr(m: &std::fs::Metadata) -> FileAttr {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn errno_from(e: std::io::Error) -> i32 {
     e.raw_os_error().unwrap_or(libc::EIO)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn read_file_range(path: &Path, offset: u64, size: u32) -> std::io::Result<(String, usize)> {
     use std::io::{Read, Seek, SeekFrom};
     let mut f = std::fs::File::open(path)?;
@@ -329,7 +329,7 @@ fn read_file_range(path: &Path, offset: u64, size: u32) -> std::io::Result<(Stri
     Ok((base64::engine::general_purpose::STANDARD.encode(&buf), n))
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn write_file_range(path: &Path, offset: u64, data_b64: &str) -> std::io::Result<usize> {
     use base64::Engine;
     use std::io::{Seek, SeekFrom, Write};
@@ -342,7 +342,7 @@ fn write_file_range(path: &Path, offset: u64, data_b64: &str) -> std::io::Result
     Ok(data.len())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn create_file(path: &Path, mode: u32) -> std::io::Result<std::fs::Metadata> {
     use std::os::unix::fs::OpenOptionsExt;
     std::fs::OpenOptions::new()
@@ -354,20 +354,20 @@ fn create_file(path: &Path, mode: u32) -> std::io::Result<std::fs::Metadata> {
     std::fs::symlink_metadata(path)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn truncate_file(path: &Path, size: u64) -> std::io::Result<()> {
     let f = std::fs::OpenOptions::new().write(true).open(path)?;
     f.set_len(size)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn set_permissions(path: &Path, mode: u32) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let perms = std::fs::Permissions::from_mode(mode & 0o7777);
     std::fs::set_permissions(path, perms)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn statfs_path(path: &Path) -> std::io::Result<StatVfs> {
     use std::ffi::CString;
     let c_path = CString::new(path.to_string_lossy().as_bytes())

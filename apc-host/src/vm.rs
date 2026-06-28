@@ -19,10 +19,9 @@ pub struct VmConfig {
     pub mcp_http: Option<crate::mcp_http::McpHttpConfig>,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub mod krun {
     use super::VmConfig;
-    use crate::display;
     use crate::input;
     use crate::krun_ffi::*;
     use anyhow::{Context, Result};
@@ -42,10 +41,11 @@ pub mod krun {
         fs_socket_path: &str,
     ) -> Result<(u32, i32)> {
         unsafe {
-            // Pre-load ANGLE's libEGL on the main thread.
-            // ANGLE's static initializers access Cocoa/Metal and deadlock
-            // if first loaded on a background thread (libkrun GPU worker).
+            #[cfg(target_os = "macos")]
             {
+                // Pre-load ANGLE's libEGL on the main thread.
+                // ANGLE's static initializers access Cocoa/Metal and deadlock
+                // if first loaded on a background thread (libkrun GPU worker).
                 use std::ffi::CStr;
                 let name = CStr::from_bytes_with_nul(b"libEGL.dylib\0").unwrap();
                 let handle = libc::dlopen(name.as_ptr(), libc::RTLD_NOW | libc::RTLD_GLOBAL);
@@ -80,7 +80,11 @@ pub mod krun {
                 krun_set_kernel(
                     ctx,
                     kernel_path.as_ptr(),
-                    KRUN_KERNEL_FORMAT_RAW,
+                    if cfg!(target_arch = "x86_64") {
+                        KRUN_KERNEL_FORMAT_ELF
+                    } else {
+                        KRUN_KERNEL_FORMAT_RAW
+                    },
                     initramfs
                         .as_ref()
                         .map(|s| s.as_ptr())
@@ -94,8 +98,9 @@ pub mod krun {
             tracing::info!(gpu_supported, "GPU feature check");
 
             if gpu_supported == 1 {
-                let gpu_flags: u32 =
-                    VIRGLRENDERER_USE_EGL | VIRGLRENDERER_USE_GLES | VIRGLRENDERER_USE_ASYNC_FENCE_CB;
+                let gpu_flags: u32 = VIRGLRENDERER_USE_EGL
+                    | VIRGLRENDERER_USE_GLES
+                    | VIRGLRENDERER_USE_ASYNC_FENCE_CB;
                 let shm_size: u64 = 512 * 1024 * 1024;
                 check(
                     krun_set_gpu_options2(ctx, gpu_flags, shm_size),
@@ -113,11 +118,16 @@ pub mod krun {
                     "display added"
                 );
 
+                #[cfg(target_os = "macos")]
                 let backend = if config.headless {
                     Box::new(crate::headless::create_headless_backend())
                 } else {
-                    Box::new(display::create_backend())
+                    Box::new(crate::display::create_backend())
                 };
+
+                #[cfg(target_os = "linux")]
+                let backend = Box::new(crate::headless::create_headless_backend());
+
                 let backend_ptr = &*backend as *const KrunDisplayBackend as *const std::ffi::c_void;
                 check(
                     krun_set_display_backend(
@@ -174,10 +184,17 @@ pub mod krun {
                 use std::os::unix::io::IntoRawFd;
                 let log = File::create("/tmp/apc-console.log").context("create console log")?;
                 let fd = log.into_raw_fd();
-                check(
-                    krun_add_serial_console_default(ctx, -1, fd),
-                    "krun_add_serial_console_default",
-                )?;
+                if cfg!(target_arch = "x86_64") {
+                    check(
+                        krun_add_virtio_console_default(ctx, -1, fd, fd),
+                        "krun_add_virtio_console_default",
+                    )?;
+                } else {
+                    check(
+                        krun_add_serial_console_default(ctx, -1, fd),
+                        "krun_add_serial_console_default",
+                    )?;
+                }
             }
 
             let socket_path = CString::new(mcp_socket_path)?;

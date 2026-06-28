@@ -1,31 +1,31 @@
 #![allow(dead_code)]
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod keyboard;
 #[cfg(target_os = "macos")]
 mod keymap;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod mouse;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub mod types;
 
 #[cfg(target_os = "macos")]
 pub use keymap::{macos_keycode_to_linux, macos_mouse_button_to_linux};
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub use types::{KrunInputConfig, KrunInputEvent, KrunInputEventProvider};
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use types::*;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn input_debug_enabled() -> bool {
     std::env::var_os("APC_INPUT_DEBUG").is_some()
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn should_log_input(counter: &AtomicU64) -> Option<u64> {
     if !input_debug_enabled() {
         return None;
@@ -39,17 +39,17 @@ fn should_log_input(counter: &AtomicU64) -> Option<u64> {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub fn create_keyboard_backend() -> (KrunInputConfig, KrunInputEventProvider) {
     keyboard::create_backend()
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub fn create_mouse_backend() -> (KrunInputConfig, KrunInputEventProvider) {
     mouse::create_backend()
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub fn send_key_event(code: u16, value: u32) {
     static KEY_EVENTS_SENT: AtomicU64 = AtomicU64::new(0);
     if let Some(count) = should_log_input(&KEY_EVENTS_SENT) {
@@ -70,7 +70,7 @@ pub fn send_key_event(code: u16, value: u32) {
     ]);
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub fn send_mouse_move_abs(x: u32, y: u32) {
     static LAST_MOUSE_ABS: AtomicU64 = AtomicU64::new(u64::MAX);
     static MOUSE_MOVES_SENT: AtomicU64 = AtomicU64::new(0);
@@ -107,7 +107,7 @@ pub fn send_mouse_move_abs(x: u32, y: u32) {
     ]);
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub fn send_mouse_button(button: u16, pressed: bool) {
     static LAST_MOUSE_BUTTONS: AtomicUsize = AtomicUsize::new(0);
     static MOUSE_BUTTONS_SENT: AtomicU64 = AtomicU64::new(0);
@@ -147,7 +147,7 @@ pub fn send_mouse_button(button: u16, pressed: bool) {
     ]);
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub fn send_mouse_scroll(dx: i32, dy: i32) {
     static MOUSE_SCROLLS_SENT: AtomicU64 = AtomicU64::new(0);
     if let Some(count) = should_log_input(&MOUSE_SCROLLS_SENT) {

@@ -5,7 +5,7 @@ pub(crate) enum InterceptedResponse {
     NoResponse,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) fn try_handle_screen_capture(
     message: &serde_json::Value,
 ) -> anyhow::Result<Option<InterceptedResponse>> {
@@ -64,7 +64,7 @@ pub(crate) fn try_handle_screen_capture(
     )?)))
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub(crate) fn try_handle_screen_capture(
     _message: &serde_json::Value,
 ) -> anyhow::Result<Option<InterceptedResponse>> {
@@ -113,21 +113,24 @@ fn parse_screen_capture_options(args: serde_json::Value) -> Result<ScreenCapture
     })
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 struct HostCapture {
     width: u32,
     height: u32,
     pixels_rgba: Vec<u8>,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn capture_current_frame() -> anyhow::Result<Option<HostCapture>> {
-    if let Some(capture) = crate::display::global_display().capture_framebuffer() {
-        return Ok(Some(HostCapture {
-            width: capture.width,
-            height: capture.height,
-            pixels_rgba: capture.pixels_rgba,
-        }));
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(capture) = crate::display::global_display().capture_framebuffer() {
+            return Ok(Some(HostCapture {
+                width: capture.width,
+                height: capture.height,
+                pixels_rgba: capture.pixels_rgba,
+            }));
+        }
     }
 
     if let Some((pixels_bgra, width, height)) =
@@ -143,7 +146,7 @@ fn capture_current_frame() -> anyhow::Result<Option<HostCapture>> {
     Ok(None)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn bgra_to_rgba(pixels_bgra: &[u8], width: u32, height: u32) -> anyhow::Result<Vec<u8>> {
     let expected_len = width as usize * height as usize * 4;
     if pixels_bgra.len() < expected_len {
@@ -160,7 +163,7 @@ fn bgra_to_rgba(pixels_bgra: &[u8], width: u32, height: u32) -> anyhow::Result<V
     Ok(pixels_rgba)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn encode_png_base64(width: u32, height: u32, pixels_rgba: &[u8]) -> anyhow::Result<String> {
     use base64::Engine;
 

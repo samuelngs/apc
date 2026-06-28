@@ -1,7 +1,8 @@
 fn main() {
+    let deps_lib = concat!(env!("CARGO_MANIFEST_DIR"), "/../deps/out/lib");
+
     #[cfg(target_os = "macos")]
     {
-        let deps_lib = concat!(env!("CARGO_MANIFEST_DIR"), "/../deps/out/lib");
         println!("cargo:rustc-link-lib=dylib=krun");
         println!("cargo:rustc-link-lib=dylib=slirp");
         println!("cargo:rustc-link-lib=dylib=glib-2.0");
@@ -12,6 +13,16 @@ fn main() {
         println!("cargo:rustc-link-lib=framework=IOSurface");
 
         verify_libkrun_rpaths(deps_lib);
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        println!("cargo:rustc-link-lib=dylib=krun");
+        println!("cargo:rustc-link-lib=dylib=slirp");
+        println!("cargo:rustc-link-lib=dylib=glib-2.0");
+        println!("cargo:rustc-link-lib=dylib=resolv");
+        println!("cargo:rustc-link-search=native={deps_lib}");
+        println!("cargo:rustc-link-arg=-Wl,-rpath,{deps_lib}");
     }
 }
 

@@ -2,17 +2,17 @@
 
 Your AI Agent's personal computer.
 
-APC runs a Debian Linux desktop inside a [libkrun](https://github.com/containers/libkrun) microVM with GPU acceleration, then exposes the desktop and an on-demand Chromium/browserd runtime to agents through [MCP](https://modelcontextprotocol.io).
+APC runs a Debian Linux desktop inside a [libkrun](https://github.com/containers/libkrun) microVM with GPU acceleration, then exposes the desktop and an on-demand Chromium/browserd runtime to agents through [MCP](https://modelcontextprotocol.io). The host supports macOS and Linux. macOS has the native GUI window path; Linux host support is headless/MCP-first.
 
 ## Architecture
 
 ```mermaid
 graph TB
-  subgraph Host["Host (macOS)"]
+  subgraph Host["Host (macOS/Linux)"]
     AH[apc-host]
-    AH --> KV[libkrun VM<br/>Apple Hypervisor.fw]
-    AH --> AN[ANGLE<br/>OpenGL ES to Metal]
-    AH --> IO[IOSurface<br/>display frames]
+    AH --> KV[libkrun VM<br/>Hypervisor.framework or KVM]
+    AH --> GPU[host GPU stack<br/>ANGLE/Metal on macOS, EGL/Mesa on Linux]
+    AH --> FB[display frames<br/>native window on macOS, headless framebuffer on Linux]
     AH --> FS[FS Server<br/>FUSE-over-vsock]
     HC[MCP clients]
     HC -->|stdio or HTTP /mcp| AH
@@ -29,7 +29,7 @@ graph TB
   FS <-->|vsock 9340<br/>FS protocol| AF
 ```
 
-`apc-host` owns the VM lifecycle, host display window, input forwarding, and MCP transport endpoints. `apc-compositor` owns the guest desktop and the MCP tool dispatcher. Browser tools are forwarded by the compositor to browserd over a private Unix socket inside the guest.
+`apc-host` owns the VM lifecycle, host display/headless framebuffer, input forwarding, and MCP transport endpoints. `apc-compositor` owns the guest desktop and the MCP tool dispatcher. Browser tools are forwarded by the compositor to browserd over a private Unix socket inside the guest.
 
 Browserd is not started at boot. The first `browser_navigate` or `browser_tab_new` call starts `/opt/apc-browserd/browserd` in Chromium GUI mode under `/home/agent`, using Wayland and the guest render node when available. `browser_tab_list` returns `No tabs open` before browserd has been started; other browser tools require an open browser tab.
 
@@ -37,7 +37,7 @@ Browserd is not started at boot. The first `browser_navigate` or `browser_tab_ne
 
 | Component | Description |
 |---|---|
-| `apc-host` | macOS host binary: VM lifecycle, display, input forwarding, MCP stdio and HTTP proxy |
+| `apc-host` | macOS/Linux host binary: VM lifecycle, display or headless framebuffer, input forwarding, MCP stdio and HTTP proxy |
 | `apc-compositor` | Linux guest Wayland compositor and MCP dispatcher |
 | `apc-fuse` | Linux guest FUSE daemon for host filesystem mounting |
 | `apc-protocol` | Shared MCP tool schemas, JSON-RPC types, screenshot helpers, and FS wire protocol |
@@ -129,14 +129,25 @@ Browser tools are backed by browserd/Chromium running inside the guest desktop.
 - Browser runtime in guest image: `/opt/apc-browserd`
 - Browser IPC socket: `$XDG_RUNTIME_DIR/apc-browserd/browserd.sock`
 
+## Host Support
+
+| Host | Status | Notes |
+|---|---|---|
+| macOS Apple Silicon | Supported | Native host window, MCP stdio, MCP Streamable HTTP |
+| Linux x86_64 | Supported for headless/MCP | Requires KVM and Linux `.so` dependencies; no native host window yet |
+| Linux aarch64 | Build path is mostly shared | Not the primary validated Linux target yet |
+
 ## Prerequisites
 
-- macOS on Apple Silicon
 - Rust toolchain
 - Docker
 - Ninja, Meson, Python 3, and standard native build tools
+- macOS: Apple Silicon host
+- Linux x86_64: KVM access (`/dev/kvm`) and standard kernel/native build packages
 
 ## Build
+
+### macOS Apple Silicon
 
 ```bash
 # 1. Build native dependencies (ANGLE, libepoxy, virglrenderer, libkrunfw, libkrun)
@@ -163,6 +174,39 @@ target/release/apc-host \
   --kernel guest/out/aarch64/vmlinuz \
   --initrd guest/out/aarch64/initramfs \
   --disk guest/out/aarch64/disk.img
+```
+
+### Linux x86_64
+
+Install distro packages for native and kernel builds first. On Debian/Ubuntu:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y --no-install-recommends \
+  build-essential bison bc ca-certificates clang curl flex git \
+  libdrm-dev libegl1-mesa-dev libelf-dev libgbm-dev libgles2-mesa-dev \
+  libglib2.0-dev libssl-dev meson ninja-build pkg-config python3 python3-pyelftools
+```
+
+Then build the Linux host dependencies and x86_64 guest image:
+
+```bash
+./deps/build-deps.sh
+./guest/build-compositor.sh x86_64
+./guest/build-fuse.sh x86_64
+./apc-browserd/scripts/build.sh x86_64
+./guest/build.sh x86_64
+cargo build --release -p apc-host
+```
+
+Run Linux hosts in headless/MCP mode:
+
+```bash
+APC_MCP_HTTP_TOKEN=dev-token target/release/apc-host \
+  --kernel guest/out/x86_64/vmlinux \
+  --initrd guest/out/x86_64/initramfs \
+  --disk guest/out/x86_64/disk.img \
+  --mcp-http-port 9570
 ```
 
 To package an existing browserd build without recompiling Chromium:

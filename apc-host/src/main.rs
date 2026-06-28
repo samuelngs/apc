@@ -33,11 +33,8 @@ pub struct Cli {
     disk: Option<PathBuf>,
 
     /// Kernel command line
-    #[arg(
-        long,
-        default_value = "console=ttyAMA0 root=/dev/vda rootfstype=ext4 modules=virtio_mmio,virtio_blk,virtio_input rw"
-    )]
-    cmdline: String,
+    #[arg(long)]
+    cmdline: Option<String>,
 
     /// Number of CPUs
     #[arg(long, default_value = "4")]
@@ -104,7 +101,7 @@ fn main() -> anyhow::Result<()> {
         .filter(|s| !s.is_empty())
         .collect();
 
-    let headless = cli.headless || cli.mcp_stdio;
+    let headless = cli.headless || cli.mcp_stdio || cfg!(target_os = "linux");
 
     let mcp_http = if let Some(port) = cli.mcp_http_port {
         let token = cli
@@ -127,7 +124,7 @@ fn main() -> anyhow::Result<()> {
         kernel: cli.kernel,
         initrd: cli.initrd,
         disk: cli.disk,
-        cmdline: cli.cmdline,
+        cmdline: cli.cmdline.unwrap_or_else(default_cmdline),
         cpus: cli.cpus,
         memory_mb: cli.memory,
         display_width: cli.width,
@@ -148,8 +145,22 @@ fn main() -> anyhow::Result<()> {
         app::run(config)?;
     }
 
-    #[cfg(not(target_os = "macos"))]
-    anyhow::bail!("APC host requires macOS with Hypervisor.framework");
+    #[cfg(target_os = "linux")]
+    {
+        headless::run(config)?;
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    anyhow::bail!("APC host supports macOS and Linux hosts");
 
     Ok(())
+}
+
+fn default_cmdline() -> String {
+    if cfg!(target_arch = "x86_64") {
+        "console=hvc0 root=/dev/vda rootfstype=ext4 rw".to_string()
+    } else {
+        "console=ttyAMA0 root=/dev/vda rootfstype=ext4 modules=virtio_mmio,virtio_blk,virtio_input rw"
+            .to_string()
+    }
 }

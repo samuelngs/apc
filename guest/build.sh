@@ -33,6 +33,11 @@ OUT_DIR="$SCRIPT_DIR/out/$ARCH"
 COMPOSITOR_BIN="$OUT_DIR/apc-compositor"
 FUSE_BIN="$OUT_DIR/apc-fuse"
 BROWSERD_RUNTIME_DIR="$WORKSPACE_DIR/apc-browserd/out/$ARCH"
+if [ "$ARCH" = "x86_64" ]; then
+    KERNEL_OUT="$OUT_DIR/vmlinux"
+else
+    KERNEL_OUT="$OUT_DIR/vmlinuz"
+fi
 
 if [ ! -x "$COMPOSITOR_BIN" ]; then
     echo "ERROR: missing required compositor binary: $COMPOSITOR_BIN"
@@ -63,7 +68,7 @@ echo "    arch:   $ARCH ($DEBIAN_ARCH)"
 echo "    suite:  $DEBIAN_SUITE"
 echo "    image:  $DEBIAN_IMAGE"
 echo "    browserd: $APC_BROWSERD"
-echo "    output: $OUT_DIR/{vmlinuz,initramfs,disk.img}"
+echo "    output: $KERNEL_OUT, $OUT_DIR/{initramfs,disk.img}"
 
 BUILD_SCRIPT=$(mktemp)
 cat > "$BUILD_SCRIPT" << 'BUILDSCRIPT'
@@ -558,29 +563,38 @@ rm -f "$BUILD_SCRIPT"
 if [ "$ARCH" = "aarch64" ]; then
     KERNEL_IMAGE=$(find "$WORKSPACE_DIR/deps/src/libkrunfw" -path "*/arch/arm64/boot/Image" 2>/dev/null | head -1)
     if [ -n "$KERNEL_IMAGE" ]; then
-        cp "$KERNEL_IMAGE" "$OUT_DIR/vmlinuz"
-        echo "==> Kernel: copied from libkrunfw ($(du -h "$OUT_DIR/vmlinuz" | cut -f1))"
-    elif [ -f "$OUT_DIR/vmlinuz" ]; then
-        echo "==> Kernel: using existing $OUT_DIR/vmlinuz (libkrunfw source not found)"
+        cp "$KERNEL_IMAGE" "$KERNEL_OUT"
+        echo "==> Kernel: copied from libkrunfw ($(du -h "$KERNEL_OUT" | cut -f1))"
+    elif [ -f "$KERNEL_OUT" ]; then
+        echo "==> Kernel: using existing $KERNEL_OUT (libkrunfw source not found)"
     else
         echo "ERROR: No aarch64 kernel available. Run deps/build-deps.sh first to build libkrunfw."
         exit 1
     fi
-elif [ -f "$OUT_DIR/vmlinuz" ]; then
-    echo "==> Kernel: using existing $OUT_DIR/vmlinuz"
+elif [ "$ARCH" = "x86_64" ]; then
+    KERNEL_ELF=$(find "$WORKSPACE_DIR/deps/src/libkrunfw" -path "*/linux-*/vmlinux" 2>/dev/null | head -1)
+    if [ -n "$KERNEL_ELF" ] && file "$KERNEL_ELF" | grep -q 'x86-64'; then
+        cp "$KERNEL_ELF" "$KERNEL_OUT"
+        echo "==> Kernel: copied x86_64 vmlinux from libkrunfw ($(du -h "$KERNEL_OUT" | cut -f1))"
+    elif [ -f "$KERNEL_OUT" ]; then
+        echo "==> Kernel: using existing $KERNEL_OUT"
+    else
+        echo "ERROR: No x86_64 vmlinux available. Run deps/build-deps.sh on an x86_64 Linux host first."
+        exit 1
+    fi
 else
-    echo "ERROR: No x86_64 kernel path is enabled until native x86_64 build and boot testing is done."
+    echo "ERROR: unsupported kernel arch: $ARCH"
     exit 1
 fi
 
 echo ""
 echo "==> Guest image built successfully"
-echo "    Kernel:    $OUT_DIR/vmlinuz"
+echo "    Kernel:    $KERNEL_OUT"
 echo "    Initramfs: $OUT_DIR/initramfs"
 echo "    Disk:      $OUT_DIR/disk.img"
 echo ""
 echo "    Run with:"
 echo "    cargo run -p apc-host -- \\"
-echo "      --kernel $OUT_DIR/vmlinuz \\"
+echo "      --kernel $KERNEL_OUT \\"
 echo "      --initrd $OUT_DIR/initramfs \\"
 echo "      --disk $OUT_DIR/disk.img"

@@ -1,4 +1,4 @@
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::{
     collections::HashMap,
     io::{BufRead, BufReader, Read, Write},
@@ -14,7 +14,7 @@ pub struct McpHttpConfig {
     pub token: String,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub fn start_server(socket_path: String, config: McpHttpConfig) -> anyhow::Result<()> {
     validate_listen_host(&config.host)?;
     let listener = TcpListener::bind((config.host.as_str(), config.port))?;
@@ -48,12 +48,12 @@ pub fn start_server(socket_path: String, config: McpHttpConfig) -> anyhow::Resul
     Ok(())
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn start_server(_socket_path: String, _config: McpHttpConfig) -> anyhow::Result<()> {
-    anyhow::bail!("MCP HTTP proxy is only supported on macOS")
+    anyhow::bail!("MCP HTTP proxy is only supported on macOS and Linux")
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn handle_connection(
     mut stream: TcpStream,
     socket_path: &str,
@@ -116,7 +116,7 @@ fn handle_connection(
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 struct HttpRequest {
     method: String,
     path: String,
@@ -124,7 +124,7 @@ struct HttpRequest {
     body: Vec<u8>,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn read_http_request(stream: &TcpStream) -> anyhow::Result<HttpRequest> {
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut request_line = String::new();
@@ -172,7 +172,7 @@ fn read_http_request(stream: &TcpStream) -> anyhow::Result<HttpRequest> {
     })
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn validate_http_message(message: &serde_json::Value) -> Result<(), &'static str> {
     match message {
         serde_json::Value::Object(_) => Ok(()),
@@ -190,7 +190,7 @@ fn validate_http_message(message: &serde_json::Value) -> Result<(), &'static str
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn forward_http_message(
     socket_path: &str,
     message: serde_json::Value,
@@ -217,7 +217,7 @@ fn forward_http_message(
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn forward_one_message(
     socket_path: &str,
     message: serde_json::Value,
@@ -234,7 +234,7 @@ fn forward_one_message(
     forward_to_guest(socket_path, &body, expect_response)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn forward_to_guest(
     socket_path: &str,
     body: &[u8],
@@ -260,7 +260,7 @@ fn forward_to_guest(
     Ok(Some(response.trim_end().as_bytes().to_vec()))
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn connect_guest(socket_path: &str) -> anyhow::Result<UnixStream> {
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
@@ -277,7 +277,7 @@ fn connect_guest(socket_path: &str) -> anyhow::Result<UnixStream> {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn validate_listen_host(host: &str) -> anyhow::Result<()> {
     match host {
         "127.0.0.1" | "localhost" | "::1" | "0.0.0.0" | "::" => Ok(()),
@@ -287,7 +287,7 @@ fn validate_listen_host(host: &str) -> anyhow::Result<()> {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn is_authorized(header: Option<&str>, token: &str) -> bool {
     let Some(header) = header else {
         return false;
@@ -298,7 +298,7 @@ fn is_authorized(header: Option<&str>, token: &str) -> bool {
         && &header[prefix.len()..] == token
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn is_allowed_origin(origin: Option<&str>) -> bool {
     let Some(origin) = origin.filter(|value| !value.is_empty()) else {
         return true;
@@ -318,7 +318,7 @@ fn is_allowed_origin(origin: Option<&str>) -> bool {
     matches!(host, "127.0.0.1" | "localhost" | "::1")
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn accepts_json(accept: Option<&str>) -> bool {
     let Some(accept) = accept.filter(|value| !value.is_empty()) else {
         return true;
@@ -331,12 +331,12 @@ fn accepts_json(accept: Option<&str>) -> bool {
     })
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn send_json(stream: &mut TcpStream, body: &[u8]) -> anyhow::Result<()> {
     send_with_headers(stream, 200, "OK", &[], body, "application/json")
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn send_text(stream: &mut TcpStream, status: u16, reason: &str, text: &str) -> anyhow::Result<()> {
     send_with_headers(
         stream,
@@ -348,7 +348,7 @@ fn send_text(stream: &mut TcpStream, status: u16, reason: &str, text: &str) -> a
     )
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn send_unauthorized(stream: &mut TcpStream) -> anyhow::Result<()> {
     send_with_headers(
         stream,
@@ -360,7 +360,7 @@ fn send_unauthorized(stream: &mut TcpStream) -> anyhow::Result<()> {
     )
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn send_with_headers(
     stream: &mut TcpStream,
     status: u16,

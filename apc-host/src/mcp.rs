@@ -1,18 +1,18 @@
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::io::{BufRead, BufReader, Write};
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::os::unix::net::UnixStream;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use apc_protocol::{JsonRpcRequest, JsonRpcResponse};
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub struct McpClient {
     writer: UnixStream,
     reader: BufReader<UnixStream>,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 impl McpClient {
     pub fn connect(socket_path: &str) -> anyhow::Result<Self> {
         let stream = UnixStream::connect(socket_path)?;
@@ -51,7 +51,7 @@ impl McpClient {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub fn run_mcp_test(socket_path: &str) {
     let path = socket_path.to_string();
     std::thread::Builder::new()
@@ -73,7 +73,7 @@ pub fn run_mcp_test(socket_path: &str) {
         .expect("failed to spawn MCP test thread");
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn run_one(client: &mut McpClient, name: &str, params: &serde_json::Value) {
     match client.call("tools/call", Some(params.clone())) {
         Ok(resp) => {
@@ -87,7 +87,7 @@ fn run_one(client: &mut McpClient, name: &str, params: &serde_json::Value) {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn run_test_suite(client: &mut McpClient) {
     tracing::info!("starting MCP test suite");
 

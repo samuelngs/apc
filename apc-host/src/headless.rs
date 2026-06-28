@@ -233,7 +233,7 @@ pub fn create_headless_backend() -> KrunDisplayBackend {
 // Headless entry point
 // ---------------------------------------------------------------------------
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub fn run(config: VmConfig) -> Result<()> {
     let mcp_socket_path = format!("/tmp/apc-mcp-{}.sock", std::process::id());
     let fs_socket_path = format!("/tmp/apc-fs-{}.sock", std::process::id());
