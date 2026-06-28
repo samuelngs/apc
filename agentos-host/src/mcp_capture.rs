@@ -1,4 +1,4 @@
-use agentos_protocol::JsonRpcResponse;
+use agentos_protocol::{JsonRpcResponse, Rect};
 
 pub(crate) enum InterceptedResponse {
     Response(Vec<u8>),
@@ -9,7 +9,7 @@ pub(crate) enum InterceptedResponse {
 pub(crate) fn try_handle_screen_capture(
     message: &serde_json::Value,
 ) -> anyhow::Result<Option<InterceptedResponse>> {
-    let Some(kind) = screen_capture_kind(message) else {
+    let Some(request) = screen_capture_request(message) else {
         return Ok(None);
     };
 
@@ -25,8 +25,33 @@ pub(crate) fn try_handle_screen_capture(
         .get("id")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
+
+    let options = match request.options {
+        Ok(options) => options,
+        Err(e) => {
+            let response = JsonRpcResponse::error(id, -32602, e);
+            return Ok(Some(InterceptedResponse::Response(serde_json::to_vec(
+                &response,
+            )?)));
+        }
+    };
+    let capture = match agentos_protocol::screenshot::apply_capture_options(
+        capture.width,
+        capture.height,
+        &capture.pixels_rgba,
+        options.region,
+        options.scale,
+    ) {
+        Ok(capture) => capture,
+        Err(e) => {
+            let response = JsonRpcResponse::error(id, -32602, e);
+            return Ok(Some(InterceptedResponse::Response(serde_json::to_vec(
+                &response,
+            )?)));
+        }
+    };
     let png_b64 = encode_png_base64(capture.width, capture.height, &capture.pixels_rgba)?;
-    let result = match kind {
+    let result = match request.kind {
         CaptureRequestKind::LegacyToolCall => serde_json::json!({
             "width": capture.width,
             "height": capture.height,
@@ -60,19 +85,63 @@ enum CaptureRequestKind {
     McpToolsCall,
 }
 
-fn screen_capture_kind(message: &serde_json::Value) -> Option<CaptureRequestKind> {
+struct ScreenCaptureRequest {
+    kind: CaptureRequestKind,
+    options: Result<ScreenCaptureOptions, String>,
+}
+
+#[derive(Clone, Copy)]
+struct ScreenCaptureOptions {
+    region: Option<Rect>,
+    scale: Option<f32>,
+}
+
+#[derive(serde::Deserialize)]
+struct ScreenCaptureArgs {
+    #[serde(default)]
+    region: Option<Rect>,
+    #[serde(default)]
+    scale: Option<f32>,
+}
+
+fn screen_capture_request(message: &serde_json::Value) -> Option<ScreenCaptureRequest> {
     match message.get("method").and_then(serde_json::Value::as_str) {
         Some("tools/call") => {
             let params = message.get("params")?;
             let name = params.get("name").and_then(serde_json::Value::as_str)?;
-            (name == "screen_capture").then_some(CaptureRequestKind::McpToolsCall)
+            (name == "screen_capture").then(|| ScreenCaptureRequest {
+                kind: CaptureRequestKind::McpToolsCall,
+                options: parse_screen_capture_options(
+                    params
+                        .get("arguments")
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::json!({})),
+                ),
+            })
         }
         _ => {
             let params = message.get("params")?;
             let tool = params.get("tool").and_then(serde_json::Value::as_str)?;
-            (tool == "screen_capture").then_some(CaptureRequestKind::LegacyToolCall)
+            (tool == "screen_capture").then(|| ScreenCaptureRequest {
+                kind: CaptureRequestKind::LegacyToolCall,
+                options: parse_screen_capture_options(
+                    params
+                        .get("params")
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::json!({})),
+                ),
+            })
         }
     }
+}
+
+fn parse_screen_capture_options(args: serde_json::Value) -> Result<ScreenCaptureOptions, String> {
+    let parsed: ScreenCaptureArgs =
+        serde_json::from_value(args).map_err(|e| format!("invalid screen_capture params: {e}"))?;
+    Ok(ScreenCaptureOptions {
+        region: parsed.region,
+        scale: parsed.scale,
+    })
 }
 
 #[cfg(target_os = "macos")]

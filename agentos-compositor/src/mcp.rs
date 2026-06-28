@@ -303,6 +303,16 @@ fn toolcall_result_to_mcp(rpc: JsonRpcResponse) -> JsonRpcResponse {
         )
     } else {
         let result = rpc.result.unwrap_or(serde_json::Value::Null);
+        if let Some(error) = result.get("error").and_then(|v| v.as_str()) {
+            return JsonRpcResponse::success(
+                rpc.id,
+                serde_json::json!({
+                    "content": [{ "type": "text", "text": error }],
+                    "isError": true
+                }),
+            );
+        }
+
         let content = if result.get("format").is_some() {
             if let Some(b64) = result.get("data").and_then(|d| d.as_str()) {
                 serde_json::json!([{ "type": "image", "data": b64, "mimeType": "image/png" }])

@@ -1,4 +1,5 @@
 pub mod fs;
+pub mod screenshot;
 
 use serde::{Deserialize, Serialize};
 
@@ -115,7 +116,7 @@ pub enum ToolCall {
     FsUnmount { guest_path: String },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Rect {
     pub x: i32,
     pub y: i32,

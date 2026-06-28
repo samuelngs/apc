@@ -5,25 +5,25 @@ use anyhow::Result;
 use smithay::{
     backend::renderer::element::AsRenderElements,
     backend::{
-        allocator::{Buffer, dmabuf::AsDmabuf, dumb::DumbAllocator, dumb::DumbBuffer},
+        allocator::{dmabuf::AsDmabuf, dumb::DumbAllocator, dumb::DumbBuffer, Buffer},
         drm::{
-            DrmDeviceFd,
             compositor::{DrmCompositor, FrameFlags, PrimaryPlaneElement, PrimarySwapchainElement},
             dumb::DumbFramebuffer,
+            DrmDeviceFd,
         },
         renderer::{
-            Bind, ExportMem, ImportAll, ImportMem, Renderer,
             element::{
-                Id, Kind,
                 memory::{MemoryRenderBuffer, MemoryRenderBufferRenderElement},
                 solid::SolidColorRenderElement,
                 surface::WaylandSurfaceRenderElement,
+                Id, Kind,
             },
             pixman::PixmanRenderer,
             sync::SyncPoint,
+            Bind, ExportMem, ImportAll, ImportMem, Renderer,
         },
     },
-    desktop::{Window, space::SpaceRenderElements},
+    desktop::{space::SpaceRenderElements, Window},
     utils::{Physical, Rectangle, Scale, Transform},
 };
 
@@ -605,7 +605,11 @@ pub(crate) fn send_frame_callbacks(state: &mut AgentCompositor) {
 }
 
 #[cfg(target_os = "linux")]
-pub(crate) fn capture_screen(state: &mut AgentCompositor) -> Result<(u32, u32, String)> {
+pub(crate) fn capture_screen(
+    state: &mut AgentCompositor,
+    region: Option<agentos_protocol::Rect>,
+    scale: Option<f32>,
+) -> Result<(u32, u32, String)> {
     use base64::Engine;
 
     state.screen_snapshot_requested = true;
@@ -614,6 +618,14 @@ pub(crate) fn capture_screen(state: &mut AgentCompositor) -> Result<(u32, u32, S
         .last_screen_snapshot
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("no rendered screen frame available"))?;
+    let snapshot = agentos_protocol::screenshot::apply_capture_options(
+        snapshot.width,
+        snapshot.height,
+        &snapshot.pixels_rgba,
+        region,
+        scale,
+    )
+    .map_err(|e| anyhow::anyhow!(e))?;
 
     let mut png_buf = Vec::new();
     {

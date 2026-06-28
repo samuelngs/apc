@@ -268,8 +268,8 @@ fn handle_sync_tool(state: &mut AgentCompositor, tool: ToolCall) -> serde_json::
                     toplevel.send_configure();
                     queue_redraw(state);
                 }
-                tracing::info!(id, "MCP window_resize done");
-                serde_json::json!({ "resized": id })
+                tracing::info!(id, "MCP window_resize requested");
+                serde_json::json!({ "resize_requested": id, "width": width, "height": height })
             } else {
                 tracing::info!(id, "MCP window_resize window not found");
                 serde_json::json!({ "error": "window not found" })
@@ -292,23 +292,43 @@ fn handle_sync_tool(state: &mut AgentCompositor, tool: ToolCall) -> serde_json::
 
         ToolCall::WindowOpen { ref cmd } => {
             let wayland_display = state.wayland_display.clone();
-            let cmd_clone = cmd.clone();
-            let cmd_name = cmd.clone();
             let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR")
                 .unwrap_or_else(|_| format!("/run/user/{}", unsafe { libc::getuid() }));
-            std::thread::spawn(move || {
-                let result = std::process::Command::new("sh")
-                    .args(["-c", &cmd_clone])
-                    .env("WAYLAND_DISPLAY", &wayland_display)
-                    .env("XDG_RUNTIME_DIR", &xdg_runtime_dir)
-                    .env("TERM", "xterm-256color")
-                    .spawn();
-                match result {
-                    Ok(_) => tracing::info!(cmd = %cmd_clone, "window_open launched"),
-                    Err(e) => tracing::error!(cmd = %cmd_clone, %e, "window_open failed"),
+            let mut child = match std::process::Command::new("sh")
+                .args(["-lc", cmd])
+                .env("HOME", "/home/agentos")
+                .env("PATH", "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin")
+                .env("WAYLAND_DISPLAY", &wayland_display)
+                .env("XDG_RUNTIME_DIR", &xdg_runtime_dir)
+                .env("TERM", "xterm-256color")
+                .spawn()
+            {
+                Ok(child) => child,
+                Err(e) => {
+                    tracing::error!(cmd = %cmd, %e, "window_open failed");
+                    return serde_json::json!({ "error": format!("window_open failed: {e}") });
                 }
-            });
-            serde_json::json!({ "opened": cmd_name })
+            };
+
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    tracing::error!(cmd = %cmd, %status, "window_open exited before creating a window");
+                    serde_json::json!({
+                        "error": format!("window_open exited before creating a window: {status}")
+                    })
+                }
+                Ok(None) => {
+                    let pid = child.id();
+                    state.mcp_pids.push(pid);
+                    tracing::info!(cmd = %cmd, pid, "window_open launched");
+                    serde_json::json!({ "launched": cmd, "pid": pid })
+                }
+                Err(e) => {
+                    tracing::error!(cmd = %cmd, %e, "window_open status check failed");
+                    serde_json::json!({ "error": format!("window_open status check failed: {e}") })
+                }
+            }
         }
 
         ToolCall::WindowClose { id } => {
@@ -319,7 +339,7 @@ fn handle_sync_tool(state: &mut AgentCompositor, tool: ToolCall) -> serde_json::
                     toplevel.send_close();
                     queue_redraw(state);
                 }
-                serde_json::json!({ "closed": id })
+                serde_json::json!({ "close_requested": id })
             } else {
                 let min_idx = id as usize - visible_count;
                 if min_idx < state.minimized_windows.len() {
@@ -329,7 +349,7 @@ fn handle_sync_tool(state: &mut AgentCompositor, tool: ToolCall) -> serde_json::
                     }
                     state.minimized_windows.remove(min_idx);
                     queue_redraw(state);
-                    serde_json::json!({ "closed": id })
+                    serde_json::json!({ "close_requested": id })
                 } else {
                     serde_json::json!({ "error": "window not found" })
                 }
@@ -422,51 +442,60 @@ fn handle_sync_tool(state: &mut AgentCompositor, tool: ToolCall) -> serde_json::
 
         ToolCall::KeyboardType { ref text } => {
             if let Some(keyboard) = state.seat.get_keyboard() {
-                let mut typed = 0u32;
-                for ch in text.chars() {
-                    if let Some((keycode, shift)) = char_to_evdev_keycode(ch) {
-                        let time = state.start_time.elapsed().as_millis() as u32;
-                        let shift_xkb: u32 = 42 + 8;
-                        if shift {
-                            keyboard.input::<(), _>(
-                                state,
-                                shift_xkb.into(),
-                                smithay::backend::input::KeyState::Pressed,
-                                SERIAL_COUNTER.next_serial(),
-                                time,
-                                |_, _, _| FilterResult::Forward,
-                            );
-                        }
+                let mut mapped_keys = Vec::new();
+                for (index, ch) in text.chars().enumerate() {
+                    let Some(mapped) = char_to_evdev_keycode(ch) else {
+                        return serde_json::json!({
+                            "error": format!(
+                                "unsupported character at index {index}: U+{:04X}",
+                                ch as u32
+                            )
+                        });
+                    };
+                    mapped_keys.push(mapped);
+                }
+
+                for (keycode, shift) in &mapped_keys {
+                    let time = state.start_time.elapsed().as_millis() as u32;
+                    let shift_xkb: u32 = 42 + 8;
+                    if *shift {
                         keyboard.input::<(), _>(
                             state,
-                            keycode.into(),
+                            shift_xkb.into(),
                             smithay::backend::input::KeyState::Pressed,
                             SERIAL_COUNTER.next_serial(),
-                            time + 1,
+                            time,
                             |_, _, _| FilterResult::Forward,
                         );
+                    }
+                    keyboard.input::<(), _>(
+                        state,
+                        (*keycode).into(),
+                        smithay::backend::input::KeyState::Pressed,
+                        SERIAL_COUNTER.next_serial(),
+                        time + 1,
+                        |_, _, _| FilterResult::Forward,
+                    );
+                    keyboard.input::<(), _>(
+                        state,
+                        (*keycode).into(),
+                        smithay::backend::input::KeyState::Released,
+                        SERIAL_COUNTER.next_serial(),
+                        time + 2,
+                        |_, _, _| FilterResult::Forward,
+                    );
+                    if *shift {
                         keyboard.input::<(), _>(
                             state,
-                            keycode.into(),
+                            shift_xkb.into(),
                             smithay::backend::input::KeyState::Released,
                             SERIAL_COUNTER.next_serial(),
-                            time + 2,
+                            time + 3,
                             |_, _, _| FilterResult::Forward,
                         );
-                        if shift {
-                            keyboard.input::<(), _>(
-                                state,
-                                shift_xkb.into(),
-                                smithay::backend::input::KeyState::Released,
-                                SERIAL_COUNTER.next_serial(),
-                                time + 3,
-                                |_, _, _| FilterResult::Forward,
-                            );
-                        }
-                        typed += 1;
                     }
                 }
-                serde_json::json!({ "typed": typed, "total": text.len() })
+                serde_json::json!({ "typed": mapped_keys.len(), "total": mapped_keys.len() })
             } else {
                 serde_json::json!({ "error": "no keyboard" })
             }
@@ -476,12 +505,21 @@ fn handle_sync_tool(state: &mut AgentCompositor, tool: ToolCall) -> serde_json::
             ref key,
             ref modifiers,
         } => {
+            let Some(keycode) = key_name_to_evdev(key) else {
+                return serde_json::json!({ "error": format!("unsupported key: {key}") });
+            };
+            let mut mod_codes = Vec::new();
+            for modifier in modifiers {
+                let Some(code) = modifier_to_evdev(modifier) else {
+                    return serde_json::json!({
+                        "error": format!("unsupported modifier: {modifier}")
+                    });
+                };
+                mod_codes.push(code);
+            }
+
             if let Some(keyboard) = state.seat.get_keyboard() {
                 let time = state.start_time.elapsed().as_millis() as u32;
-                let mod_codes: Vec<u32> = modifiers
-                    .iter()
-                    .filter_map(|m| modifier_to_evdev(m))
-                    .collect();
                 for &mc in &mod_codes {
                     keyboard.input::<(), _>(
                         state,
@@ -492,24 +530,22 @@ fn handle_sync_tool(state: &mut AgentCompositor, tool: ToolCall) -> serde_json::
                         |_, _, _| FilterResult::Forward,
                     );
                 }
-                if let Some(keycode) = key_name_to_evdev(key) {
-                    keyboard.input::<(), _>(
-                        state,
-                        keycode.into(),
-                        smithay::backend::input::KeyState::Pressed,
-                        SERIAL_COUNTER.next_serial(),
-                        time + 1,
-                        |_, _, _| FilterResult::Forward,
-                    );
-                    keyboard.input::<(), _>(
-                        state,
-                        keycode.into(),
-                        smithay::backend::input::KeyState::Released,
-                        SERIAL_COUNTER.next_serial(),
-                        time + 2,
-                        |_, _, _| FilterResult::Forward,
-                    );
-                }
+                keyboard.input::<(), _>(
+                    state,
+                    keycode.into(),
+                    smithay::backend::input::KeyState::Pressed,
+                    SERIAL_COUNTER.next_serial(),
+                    time + 1,
+                    |_, _, _| FilterResult::Forward,
+                );
+                keyboard.input::<(), _>(
+                    state,
+                    keycode.into(),
+                    smithay::backend::input::KeyState::Released,
+                    SERIAL_COUNTER.next_serial(),
+                    time + 2,
+                    |_, _, _| FilterResult::Forward,
+                );
                 for &mc in mod_codes.iter().rev() {
                     keyboard.input::<(), _>(
                         state,
@@ -526,10 +562,7 @@ fn handle_sync_tool(state: &mut AgentCompositor, tool: ToolCall) -> serde_json::
             }
         }
 
-        ToolCall::ScreenCapture {
-            region: _,
-            scale: _,
-        } => match capture_screen(state) {
+        ToolCall::ScreenCapture { region, scale } => match capture_screen(state, region, scale) {
             Ok((w, h, png_b64)) => {
                 serde_json::json!({
                     "width": w,
