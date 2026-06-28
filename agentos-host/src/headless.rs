@@ -239,6 +239,10 @@ pub fn run(config: VmConfig) -> Result<()> {
         crate::mcp::run_mcp_test(&mcp_socket_path);
     }
 
+    if let Some(mcp_http) = config.mcp_http.clone() {
+        crate::mcp_http::start_server(mcp_socket_path.clone(), mcp_http)?;
+    }
+
     if config.mcp_stdio {
         crate::mcp_stdio::run_stdio_proxy(&mcp_socket_path)?;
     } else {

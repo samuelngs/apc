@@ -7,6 +7,7 @@ ARCH="${1:-aarch64}"
 DEBIAN_SUITE="${DEBIAN_SUITE:-trixie}"
 DEBIAN_MIRROR="${DEBIAN_MIRROR:-http://deb.debian.org/debian}"
 DISK_SIZE_MB="${DISK_SIZE_MB:-4096}"
+AGENTOS_BROWSERD="${AGENTOS_BROWSERD:-1}"
 
 case "$ARCH" in
     aarch64|arm64)
@@ -31,6 +32,7 @@ DEBIAN_IMAGE="${DEBIAN_IMAGE:-$DEBIAN_IMAGE_DEFAULT}"
 OUT_DIR="$SCRIPT_DIR/out/$ARCH"
 COMPOSITOR_BIN="$OUT_DIR/agentos-compositor"
 FUSE_BIN="$OUT_DIR/agentos-fuse"
+BROWSERD_RUNTIME_DIR="$WORKSPACE_DIR/agentos-browserd/out/$ARCH"
 
 if [ ! -x "$COMPOSITOR_BIN" ]; then
     echo "ERROR: missing required compositor binary: $COMPOSITOR_BIN"
@@ -44,12 +46,23 @@ if [ ! -x "$FUSE_BIN" ]; then
     exit 1
 fi
 
+BROWSERD_DOCKER_ARGS=()
+if [ "$AGENTOS_BROWSERD" = "1" ]; then
+    if [ ! -x "$BROWSERD_RUNTIME_DIR/browserd" ]; then
+        echo "ERROR: missing required browserd runtime: $BROWSERD_RUNTIME_DIR/browserd"
+        echo "Run ./agentos-browserd/scripts/build.sh $ARCH first."
+        exit 1
+    fi
+    BROWSERD_DOCKER_ARGS=(-v "$BROWSERD_RUNTIME_DIR:/browserd-runtime:ro")
+fi
+
 mkdir -p "$OUT_DIR"
 
 echo "==> Building AgentOS Debian guest image"
 echo "    arch:   $ARCH ($DEBIAN_ARCH)"
 echo "    suite:  $DEBIAN_SUITE"
 echo "    image:  $DEBIAN_IMAGE"
+echo "    browserd: $AGENTOS_BROWSERD"
 echo "    output: $OUT_DIR/{vmlinuz,initramfs,disk.img}"
 
 BUILD_SCRIPT=$(mktemp)
@@ -61,6 +74,7 @@ DISK_SIZE_MB="$1"
 DEBIAN_SUITE="$2"
 DEBIAN_ARCH="$3"
 DEBIAN_MIRROR="$4"
+BROWSERD_ENABLED="$5"
 
 RUNTIME_PACKAGES=(
     base-files
@@ -83,20 +97,41 @@ RUNTIME_PACKAGES=(
     iproute2
     iputils-ping
     kmod
+    libatk-bridge2.0-0t64
+    libasound2t64
+    libcups2t64
     libc6
     libdrm2
     libegl1
     libgbm1
+    libglib2.0-0t64
     libgles2
+    libgtk-3-0t64
     libinput-bin
     libinput-tools
     libinput10
+    libnspr4
+    libnss3
+    libpango-1.0-0
+    libpangocairo-1.0-0
+    libpulse0
     libseat1
     libudev1
     libwayland-client0
     libwayland-egl1
     libwayland-server0
+    libx11-6
+    libxcb1
+    libxcomposite1
+    libxcursor1
+    libxdamage1
+    libxext6
+    libxfixes3
+    libxi6
     libxkbcommon0
+    libxrandr2
+    libxrender1
+    libxshmfence1
     mesa-utils
     mesa-vulkan-drivers
     neovim
@@ -142,6 +177,11 @@ cp -a /overlay/. /rootfs/
 install -m 0755 /output/agentos-compositor /rootfs/usr/local/bin/agentos-compositor
 install -m 0755 /output/agentos-fuse /rootfs/usr/local/bin/agentos-fuse
 chmod 0755 /rootfs/usr/local/bin/start-compositor
+if [ "$BROWSERD_ENABLED" = "1" ]; then
+    mkdir -p /rootfs/opt/agentos-browserd
+    cp -a /browserd-runtime/. /rootfs/opt/agentos-browserd/
+    chmod 0755 /rootfs/opt/agentos-browserd/browserd
+fi
 
 echo "--- Configuring Debian rootfs ---"
 echo "agentos" > /rootfs/etc/hostname
@@ -202,6 +242,9 @@ echo "agentos ALL=(ALL) NOPASSWD: ALL" > /rootfs/etc/sudoers.d/agentos
 chmod 0440 /rootfs/etc/sudoers.d/agentos
 
 mkdir -p /rootfs/home/agentos /rootfs/mnt/shared /rootfs/run/user/1000 /rootfs/tmp /rootfs/dev/shm
+if [ "$BROWSERD_ENABLED" = "1" ]; then
+    mkdir -p /rootfs/home/agentos/.config/agentos-browserd
+fi
 chown -R 1000:1000 /rootfs/home/agentos /rootfs/mnt/shared /rootfs/run/user/1000
 chmod 0700 /rootfs/run/user/1000
 chmod 1777 /rootfs/tmp /rootfs/dev/shm
@@ -506,8 +549,9 @@ docker run --rm \
     -v "$SCRIPT_DIR/rootfs:/overlay:ro" \
     -v "$OUT_DIR:/output" \
     -v "$BUILD_SCRIPT:/build.sh:ro" \
+    "${BROWSERD_DOCKER_ARGS[@]}" \
     "$DEBIAN_IMAGE" \
-    bash /build.sh "$DISK_SIZE_MB" "$DEBIAN_SUITE" "$DEBIAN_ARCH" "$DEBIAN_MIRROR"
+    bash /build.sh "$DISK_SIZE_MB" "$DEBIAN_SUITE" "$DEBIAN_ARCH" "$DEBIAN_MIRROR" "$AGENTOS_BROWSERD"
 
 rm -f "$BUILD_SCRIPT"
 

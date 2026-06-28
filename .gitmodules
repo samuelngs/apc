@@ -1,0 +1,3 @@
+[submodule "agentos-browserd/third_party/browserd"]
+	path = agentos-browserd/third_party/browserd
+	url = https://github.com/samuelngs/browserd.git

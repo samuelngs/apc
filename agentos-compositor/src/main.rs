@@ -1,4 +1,5 @@
 mod bitmap;
+mod browser;
 mod cursor;
 mod font;
 mod grabs;

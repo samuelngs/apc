@@ -61,7 +61,11 @@ pub enum FsOp {
     Open { path: String, flags: u32 },
 
     #[serde(rename = "read")]
-    Read { path: String, offset: u64, size: u32 },
+    Read {
+        path: String,
+        offset: u64,
+        size: u32,
+    },
 
     #[serde(rename = "write")]
     Write {

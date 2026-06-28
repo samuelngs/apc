@@ -5,6 +5,7 @@ pub mod headless;
 pub mod input;
 mod krun_ffi;
 pub mod mcp;
+pub mod mcp_http;
 pub mod mcp_stdio;
 pub mod slirp;
 mod vm;
@@ -73,6 +74,18 @@ pub struct Cli {
     /// Expose MCP over stdin/stdout (implies --headless)
     #[arg(long)]
     mcp_stdio: bool,
+
+    /// Expose MCP over Streamable HTTP on /mcp
+    #[arg(long)]
+    mcp_http_port: Option<u16>,
+
+    /// Host/address for --mcp-http-port
+    #[arg(long, default_value = "127.0.0.1")]
+    mcp_http_host: String,
+
+    /// Bearer token for --mcp-http-port (or AGENTOS_MCP_HTTP_TOKEN)
+    #[arg(long)]
+    mcp_http_token: Option<String>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -89,6 +102,25 @@ fn main() -> anyhow::Result<()> {
 
     let headless = cli.headless || cli.mcp_stdio;
 
+    let mcp_http = if let Some(port) = cli.mcp_http_port {
+        let token = cli
+            .mcp_http_token
+            .or_else(|| std::env::var("AGENTOS_MCP_HTTP_TOKEN").ok())
+            .filter(|token| !token.is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "--mcp-http-port requires --mcp-http-token or AGENTOS_MCP_HTTP_TOKEN"
+                )
+            })?;
+        Some(mcp_http::McpHttpConfig {
+            host: cli.mcp_http_host,
+            port,
+            token,
+        })
+    } else {
+        None
+    };
+
     let config = vm::VmConfig {
         kernel: cli.kernel,
         initrd: cli.initrd,
@@ -104,6 +136,7 @@ fn main() -> anyhow::Result<()> {
         allow_mount,
         headless,
         mcp_stdio: cli.mcp_stdio,
+        mcp_http,
     };
 
     #[cfg(target_os = "macos")]

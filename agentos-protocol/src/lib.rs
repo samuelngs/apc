@@ -158,7 +158,7 @@ fn default_guest_workspace() -> String {
 pub const VSOCK_PORT: u32 = 9339;
 
 pub fn mcp_tool_schemas() -> Vec<serde_json::Value> {
-    serde_json::json!([
+    let mut tools = serde_json::json!([
         {
             "name": "screen_capture",
             "description": "Capture the guest display as a PNG screenshot (full screen or a region).",
@@ -347,6 +347,276 @@ pub fn mcp_tool_schemas() -> Vec<serde_json::Value> {
                 "properties": { "guest_path": { "type": "string" } },
                 "required": ["guest_path"]
             }
+        }
+    ])
+    .as_array()
+    .unwrap()
+    .clone();
+    tools.extend(browser_tool_schemas());
+    tools
+}
+
+pub const BROWSER_TOOL_NAMES: &[&str] = &[
+    "browser_navigate",
+    "browser_navigate_back",
+    "browser_navigate_forward",
+    "browser_reload",
+    "browser_snapshot",
+    "browser_take_screenshot",
+    "browser_click",
+    "browser_hover",
+    "browser_type",
+    "browser_press_key",
+    "browser_select_option",
+    "browser_drag",
+    "browser_scroll",
+    "browser_evaluate",
+    "browser_console_messages",
+    "browser_wait_for",
+    "browser_tab_list",
+    "browser_tab_new",
+    "browser_close",
+    "browser_resize",
+    "browser_cookie_list",
+    "browser_cookie_get",
+    "browser_cookie_set",
+    "browser_cookie_delete",
+    "browser_cookie_clear",
+];
+
+pub fn is_browser_tool_name(name: &str) -> bool {
+    BROWSER_TOOL_NAMES.contains(&name)
+}
+
+pub fn browser_tool_schemas() -> Vec<serde_json::Value> {
+    serde_json::json!([
+        {
+            "name": "browser_navigate",
+            "description": "Navigate to a URL",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "url": { "type": "string", "description": "URL to navigate to" } },
+                "required": ["url"]
+            }
+        },
+        {
+            "name": "browser_navigate_back",
+            "description": "Go back in browser history",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "browser_navigate_forward",
+            "description": "Go forward in browser history",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "browser_reload",
+            "description": "Reload the current page",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "browser_snapshot",
+            "description": "Capture an accessibility snapshot of the current page",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "browser_take_screenshot",
+            "description": "Take a screenshot of the current page",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "browser_click",
+            "description": "Click an element on the page using its accessibility ref",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "ref": { "type": "string", "description": "Element ref from accessibility snapshot" } },
+                "required": ["ref"]
+            }
+        },
+        {
+            "name": "browser_hover",
+            "description": "Hover over an element on the page",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "ref": { "type": "string", "description": "Element ref from accessibility snapshot" } },
+                "required": ["ref"]
+            }
+        },
+        {
+            "name": "browser_type",
+            "description": "Type text into a focused element",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "ref": { "type": "string", "description": "Element ref from accessibility snapshot" },
+                    "text": { "type": "string", "description": "Text to type" },
+                    "clear": { "type": "boolean", "description": "Clear existing text before typing" }
+                },
+                "required": ["ref", "text"]
+            }
+        },
+        {
+            "name": "browser_press_key",
+            "description": "Press a keyboard key or key combination",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "key": { "type": "string", "description": "Key to press (e.g. Enter, Tab, ArrowDown)" } },
+                "required": ["key"]
+            }
+        },
+        {
+            "name": "browser_select_option",
+            "description": "Select option(s) in a select element",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "ref": { "type": "string", "description": "Element ref from accessibility snapshot" },
+                    "values": {
+                        "type": "array",
+                        "description": "Option values to select",
+                        "items": { "type": "string" }
+                    }
+                },
+                "required": ["ref", "values"]
+            }
+        },
+        {
+            "name": "browser_drag",
+            "description": "Drag and drop from one element to another",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "startRef": { "type": "string", "description": "Source element ref" },
+                    "endRef": { "type": "string", "description": "Target element ref" }
+                },
+                "required": ["startRef", "endRef"]
+            }
+        },
+        {
+            "name": "browser_scroll",
+            "description": "Scroll the page",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "deltaX": { "type": "integer", "description": "Horizontal scroll amount in pixels" },
+                    "deltaY": { "type": "integer", "description": "Vertical scroll amount in pixels" }
+                }
+            }
+        },
+        {
+            "name": "browser_evaluate",
+            "description": "Execute JavaScript in the browser console",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "expression": { "type": "string", "description": "JavaScript expression to evaluate" } },
+                "required": ["expression"]
+            }
+        },
+        {
+            "name": "browser_console_messages",
+            "description": "Get console messages from the page",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "browser_wait_for",
+            "description": "Wait for a selector to appear or text to be present on the page",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "selector": { "type": "string", "description": "CSS selector to wait for" },
+                    "text": { "type": "string", "description": "Text to wait for on the page" },
+                    "timeout": { "type": "integer", "description": "Timeout in milliseconds (default 30000)" }
+                }
+            }
+        },
+        {
+            "name": "browser_tab_list",
+            "description": "List all open browser tabs",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "browser_tab_new",
+            "description": "Open a new browser tab",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "url": { "type": "string", "description": "URL to open in the new tab" } }
+            }
+        },
+        {
+            "name": "browser_close",
+            "description": "Close a browser tab",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "targetId": {
+                        "type": "string",
+                        "description": "Target ID of the tab to close (closes current if omitted)"
+                    }
+                }
+            }
+        },
+        {
+            "name": "browser_resize",
+            "description": "Resize the browser viewport",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "width": { "type": "integer", "description": "Viewport width in pixels" },
+                    "height": { "type": "integer", "description": "Viewport height in pixels" }
+                }
+            }
+        },
+        {
+            "name": "browser_cookie_list",
+            "description": "List cookies, optionally filtered by URL",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "url": { "type": "string", "description": "URL to filter cookies by" } }
+            }
+        },
+        {
+            "name": "browser_cookie_get",
+            "description": "Get a specific cookie by name",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "name": { "type": "string", "description": "Cookie name" } },
+                "required": ["name"]
+            }
+        },
+        {
+            "name": "browser_cookie_set",
+            "description": "Set a cookie",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Cookie name" },
+                    "value": { "type": "string", "description": "Cookie value" },
+                    "domain": { "type": "string", "description": "Cookie domain" },
+                    "path": { "type": "string", "description": "Cookie path" },
+                    "url": { "type": "string", "description": "URL to associate cookie with" },
+                    "secure": { "type": "boolean", "description": "Secure flag" },
+                    "httpOnly": { "type": "boolean", "description": "HttpOnly flag" }
+                },
+                "required": ["name", "value"]
+            }
+        },
+        {
+            "name": "browser_cookie_delete",
+            "description": "Delete a cookie by name",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Cookie name to delete" },
+                    "url": { "type": "string", "description": "URL the cookie belongs to" },
+                    "domain": { "type": "string", "description": "Cookie domain" }
+                },
+                "required": ["name"]
+            }
+        },
+        {
+            "name": "browser_cookie_clear",
+            "description": "Clear all cookies",
+            "inputSchema": { "type": "object", "properties": {} }
         }
     ])
     .as_array()

@@ -20,9 +20,16 @@ use calloop::generic::Generic;
 use calloop::{Interest, Mode, PostAction};
 
 #[cfg(target_os = "linux")]
-pub struct McpCommand {
-    pub tool: ToolCall,
-    pub reply: mpsc::SyncSender<serde_json::Value>,
+pub enum McpCommand {
+    Tool {
+        tool: ToolCall,
+        reply: mpsc::SyncSender<serde_json::Value>,
+    },
+    BrowserTool {
+        name: String,
+        arguments: serde_json::Value,
+        reply: mpsc::SyncSender<serde_json::Value>,
+    },
 }
 
 #[cfg(target_os = "linux")]
@@ -44,14 +51,30 @@ pub fn start(
     loop_handle
         .insert_source(cmd_rx, |event, _, data| {
             if let channel::Event::Msg(cmd) = event {
-                let result = super::mcp_dispatch::handle_mcp_tool(
-                    &mut data.state,
-                    &mut data.display,
-                    cmd.tool,
-                    cmd.reply.clone(),
-                );
-                if let Some(value) = result {
-                    let _ = cmd.reply.send(value);
+                match cmd {
+                    McpCommand::Tool { tool, reply } => {
+                        let result = super::mcp_dispatch::handle_mcp_tool(
+                            &mut data.state,
+                            &mut data.display,
+                            tool,
+                            reply.clone(),
+                        );
+                        if let Some(value) = result {
+                            let _ = reply.send(value);
+                        }
+                    }
+                    McpCommand::BrowserTool {
+                        name,
+                        arguments,
+                        reply,
+                    } => {
+                        super::mcp_dispatch::handle_browser_tool(
+                            &mut data.state,
+                            name,
+                            arguments,
+                            reply,
+                        );
+                    }
                 }
             }
         })
@@ -235,6 +258,15 @@ fn handle_request(
                 .cloned()
                 .unwrap_or(serde_json::json!({}));
 
+            if agentos_protocol::is_browser_tool_name(name) {
+                return Some(dispatch_browser_tool(
+                    request.id.clone(),
+                    name.to_string(),
+                    arguments,
+                    cmd_tx,
+                ));
+            }
+
             match agentos_protocol::toolcall_from_mcp(name, &arguments) {
                 Ok(call) => {
                     let rpc = dispatch_tool(request.id.clone(), call, cmd_tx);
@@ -296,7 +328,7 @@ fn dispatch_tool(
         _ => std::time::Duration::from_secs(5),
     };
     let (reply_tx, reply_rx) = mpsc::sync_channel(1);
-    let cmd = McpCommand {
+    let cmd = McpCommand::Tool {
         tool,
         reply: reply_tx,
     };
@@ -306,5 +338,27 @@ fn dispatch_tool(
     match reply_rx.recv_timeout(timeout) {
         Ok(result) => JsonRpcResponse::success(id, result),
         Err(_) => JsonRpcResponse::error(id, -32000, "compositor timeout"),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn dispatch_browser_tool(
+    id: serde_json::Value,
+    name: String,
+    arguments: serde_json::Value,
+    cmd_tx: &channel::Sender<McpCommand>,
+) -> JsonRpcResponse {
+    let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+    let cmd = McpCommand::BrowserTool {
+        name,
+        arguments,
+        reply: reply_tx,
+    };
+    if cmd_tx.send(cmd).is_err() {
+        return JsonRpcResponse::error(id, -32000, "compositor channel closed");
+    }
+    match reply_rx.recv_timeout(std::time::Duration::from_secs(180)) {
+        Ok(result) => JsonRpcResponse::success(id, result),
+        Err(_) => JsonRpcResponse::error(id, -32000, "browserd timeout"),
     }
 }

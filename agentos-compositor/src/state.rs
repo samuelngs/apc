@@ -4,8 +4,9 @@ use anyhow::{Context, Result};
 #[cfg(target_os = "linux")]
 use smithay::{
     backend::{
+        allocator::dmabuf::Dmabuf,
         allocator::dumb::DumbAllocator,
-        drm::{DrmDevice, DrmDeviceFd, DrmEvent, DrmSurface},
+        drm::{DrmDevice, DrmDeviceFd, DrmEvent, DrmNode, DrmSurface, NodeType},
         input::{Device, DeviceCapability, InputEvent},
         libinput::{LibinputInputBackend, LibinputSessionInterface},
         renderer::{
@@ -47,6 +48,7 @@ use smithay::{
             self, CompositorClientState, CompositorHandler, CompositorState, get_parent,
             is_sync_subsurface,
         },
+        dmabuf::{DmabufFeedbackBuilder, DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
         output::OutputHandler,
         output::OutputManagerState,
         selection::{
@@ -124,6 +126,8 @@ pub(crate) struct AgentCompositor {
     pub(crate) xdg_shell_state: XdgShellState,
     pub(crate) xdg_decoration_state: XdgDecorationState,
     pub(crate) shm_state: ShmState,
+    pub(crate) dmabuf_state: DmabufState,
+    pub(crate) dmabuf_global: DmabufGlobal,
     pub(crate) seat_state: SeatState<Self>,
     pub(crate) data_device_state: DataDeviceState,
     pub(crate) output_manager_state: OutputManagerState,
@@ -165,6 +169,7 @@ pub(crate) struct AgentCompositor {
         HashSet<smithay::reexports::wayland_server::protocol::wl_surface::WlSurface>,
 
     pub(crate) wayland_display: String,
+    pub(crate) browser: crate::browser::BrowserService,
     pub(crate) mcp_tx: calloop::channel::Sender<crate::mcp::McpCommand>,
     pub(crate) editor_pid: Option<u32>,
     pub(crate) mcp_pids: Vec<u32>,
@@ -655,6 +660,31 @@ impl BufferHandler for AgentCompositor {
 }
 
 #[cfg(target_os = "linux")]
+impl DmabufHandler for AgentCompositor {
+    fn dmabuf_state(&mut self) -> &mut DmabufState {
+        &mut self.dmabuf_state
+    }
+
+    fn dmabuf_imported(
+        &mut self,
+        _global: &DmabufGlobal,
+        dmabuf: Dmabuf,
+        notifier: ImportNotifier,
+    ) {
+        match self.renderer.import_dmabuf(&dmabuf, None) {
+            Ok(_) => {
+                let _ = notifier.successful::<AgentCompositor>();
+                queue_redraw(self);
+            }
+            Err(e) => {
+                tracing::warn!(%e, "failed to import client dmabuf");
+                notifier.failed();
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
 impl SeatHandler for AgentCompositor {
     type KeyboardFocus = WlSurface;
     type PointerFocus = WlSurface;
@@ -697,6 +727,8 @@ smithay::delegate_compositor!(AgentCompositor);
 smithay::delegate_xdg_shell!(AgentCompositor);
 #[cfg(target_os = "linux")]
 smithay::delegate_shm!(AgentCompositor);
+#[cfg(target_os = "linux")]
+smithay::delegate_dmabuf!(AgentCompositor);
 #[cfg(target_os = "linux")]
 smithay::delegate_seat!(AgentCompositor);
 #[cfg(target_os = "linux")]
@@ -770,6 +802,20 @@ pub fn run() -> Result<()> {
     let allocator = DumbAllocator::new(device_fd.clone());
     let renderer = PixmanRenderer::new().context("Pixman renderer")?;
     let renderer_formats: HashSet<_> = renderer.dmabuf_formats().into_iter().collect();
+    let dmabuf_formats = renderer_formats.clone();
+    let primary_node = DrmNode::from_file(&device_fd).context("DRM node from device fd")?;
+    let feedback_node = primary_node
+        .node_with_type(NodeType::Render)
+        .transpose()
+        .context("DRM render node from primary node")?
+        .unwrap_or(primary_node);
+    let feedback_device = feedback_node.dev_id();
+    tracing::info!(
+        node = %feedback_node,
+        major = feedback_node.major(),
+        minor = feedback_node.minor(),
+        "linux-dmabuf feedback device selected"
+    );
     let exporter = device_fd.clone();
 
     let output = Output::new(
@@ -870,6 +916,17 @@ pub fn run() -> Result<()> {
     let xdg_shell_state = XdgShellState::new::<AgentCompositor>(&dh);
     let xdg_decoration_state = XdgDecorationState::new::<AgentCompositor>(&dh);
     let shm_state = ShmState::new::<AgentCompositor>(&dh, vec![]);
+    let mut dmabuf_state = DmabufState::new();
+    let dmabuf_format_count = dmabuf_formats.len();
+    let dmabuf_feedback = DmabufFeedbackBuilder::new(feedback_device, dmabuf_formats)
+        .build()
+        .context("linux-dmabuf feedback")?;
+    let dmabuf_global =
+        dmabuf_state.create_global_with_default_feedback::<AgentCompositor>(&dh, &dmabuf_feedback);
+    tracing::info!(
+        formats = dmabuf_format_count,
+        "linux-dmabuf global created with default feedback"
+    );
     let mut seat_state = SeatState::<AgentCompositor>::new();
     let data_device_state = DataDeviceState::new::<AgentCompositor>(&dh);
     let output_manager_state = OutputManagerState::new_with_xdg_output::<AgentCompositor>(&dh);
@@ -980,6 +1037,8 @@ pub fn run() -> Result<()> {
         xdg_shell_state,
         xdg_decoration_state,
         shm_state,
+        dmabuf_state,
+        dmabuf_global,
         seat_state,
         data_device_state,
         output_manager_state,
@@ -1012,6 +1071,7 @@ pub fn run() -> Result<()> {
         scale_factor,
         ssd_windows: HashSet::new(),
         wayland_display: socket_name.clone(),
+        browser: crate::browser::BrowserService::new(socket_name.clone()),
         mcp_tx,
         editor_pid: None,
         mcp_pids: Vec::new(),
