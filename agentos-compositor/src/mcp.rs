@@ -276,18 +276,11 @@ fn handle_request(
             }
         }
 
-        _ => {
-            let tool: Result<ToolCall, _> =
-                serde_json::from_value(request.params.clone().unwrap_or(serde_json::Value::Null));
-            match tool {
-                Ok(call) => Some(dispatch_tool(request.id.clone(), call, cmd_tx)),
-                Err(e) => Some(JsonRpcResponse::error(
-                    request.id.clone(),
-                    -32602,
-                    format!("invalid params: {e}"),
-                )),
-            }
-        }
+        _ => Some(JsonRpcResponse::error(
+            request.id.clone(),
+            -32601,
+            format!("method not found: {}", request.method),
+        )),
     }
 }
 

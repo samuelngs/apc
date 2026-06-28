@@ -75,7 +75,7 @@ pub fn run_mcp_test(socket_path: &str) {
 
 #[cfg(target_os = "macos")]
 fn run_one(client: &mut McpClient, name: &str, params: &serde_json::Value) {
-    match client.call("tool_call", Some(params.clone())) {
+    match client.call("tools/call", Some(params.clone())) {
         Ok(resp) => {
             if let Some(result) = &resp.result {
                 tracing::info!(test = name, result = %serde_json::to_string(result).unwrap_or_default(), "ok");
@@ -94,24 +94,24 @@ fn run_test_suite(client: &mut McpClient) {
     let tests: &[(&str, serde_json::Value)] = &[
         (
             "shell_exec hostname",
-            serde_json::json!({"tool": "shell_exec", "params": {"cmd": "hostname"}}),
+            serde_json::json!({"name": "shell_exec", "arguments": {"cmd": "hostname"}}),
         ),
         (
             "shell_exec uname",
-            serde_json::json!({"tool": "shell_exec", "params": {"cmd": "uname -a"}}),
+            serde_json::json!({"name": "shell_exec", "arguments": {"cmd": "uname -a"}}),
         ),
-        ("window_list", serde_json::json!({"tool": "window_list"})),
+        ("window_list", serde_json::json!({"name": "window_list"})),
         (
             "mouse_move",
-            serde_json::json!({"tool": "mouse_move", "params": {"x": 500, "y": 300}}),
+            serde_json::json!({"name": "mouse_move", "arguments": {"x": 500, "y": 300}}),
         ),
         (
             "screen_capture",
-            serde_json::json!({"tool": "screen_capture", "params": {}}),
+            serde_json::json!({"name": "screen_capture", "arguments": {}}),
         ),
         (
             "window_open foot",
-            serde_json::json!({"tool": "window_open", "params": {"cmd": "foot"}}),
+            serde_json::json!({"name": "window_open", "arguments": {"cmd": "foot"}}),
         ),
     ];
 
@@ -124,31 +124,31 @@ fn run_test_suite(client: &mut McpClient) {
     let post_tests: &[(&str, serde_json::Value)] = &[
         (
             "window_list post",
-            serde_json::json!({"tool": "window_list"}),
+            serde_json::json!({"name": "window_list"}),
         ),
         (
             "window_move",
-            serde_json::json!({"tool": "window_move", "params": {"id": 0, "x": 100, "y": 50}}),
+            serde_json::json!({"name": "window_move", "arguments": {"id": 0, "x": 100, "y": 50}}),
         ),
         (
             "window_resize",
-            serde_json::json!({"tool": "window_resize", "params": {"id": 0, "width": 800, "height": 600}}),
+            serde_json::json!({"name": "window_resize", "arguments": {"id": 0, "width": 800, "height": 600}}),
         ),
         (
             "window_focus",
-            serde_json::json!({"tool": "window_focus", "params": {"id": 0}}),
+            serde_json::json!({"name": "window_focus", "arguments": {"id": 0}}),
         ),
         (
             "mouse_click left",
-            serde_json::json!({"tool": "mouse_click", "params": {"button": "left"}}),
+            serde_json::json!({"name": "mouse_click", "arguments": {"button": "left"}}),
         ),
         (
             "file_write",
-            serde_json::json!({"tool": "file_write", "params": {"path": "/tmp/mcp_test.txt", "data": [104,101,108,108,111]}}),
+            serde_json::json!({"name": "file_write", "arguments": {"path": "/tmp/mcp_test.txt", "data": [104,101,108,108,111]}}),
         ),
         (
             "file_read",
-            serde_json::json!({"tool": "file_read", "params": {"path": "/tmp/mcp_test.txt"}}),
+            serde_json::json!({"name": "file_read", "arguments": {"path": "/tmp/mcp_test.txt"}}),
         ),
     ];
 

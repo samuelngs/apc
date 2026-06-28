@@ -9,7 +9,7 @@ pub(crate) enum InterceptedResponse {
 pub(crate) fn try_handle_screen_capture(
     message: &serde_json::Value,
 ) -> anyhow::Result<Option<InterceptedResponse>> {
-    let Some(request) = screen_capture_request(message) else {
+    let Some(options) = screen_capture_options(message) else {
         return Ok(None);
     };
 
@@ -26,7 +26,7 @@ pub(crate) fn try_handle_screen_capture(
         .cloned()
         .unwrap_or(serde_json::Value::Null);
 
-    let options = match request.options {
+    let options = match options {
         Ok(options) => options,
         Err(e) => {
             let response = JsonRpcResponse::error(id, -32602, e);
@@ -51,21 +51,13 @@ pub(crate) fn try_handle_screen_capture(
         }
     };
     let png_b64 = encode_png_base64(capture.width, capture.height, &capture.pixels_rgba)?;
-    let result = match request.kind {
-        CaptureRequestKind::LegacyToolCall => serde_json::json!({
-            "width": capture.width,
-            "height": capture.height,
-            "format": "png_base64",
+    let result = serde_json::json!({
+        "content": [{
+            "type": "image",
             "data": png_b64,
-        }),
-        CaptureRequestKind::McpToolsCall => serde_json::json!({
-            "content": [{
-                "type": "image",
-                "data": png_b64,
-                "mimeType": "image/png",
-            }]
-        }),
-    };
+            "mimeType": "image/png",
+        }]
+    });
     let response = JsonRpcResponse::success(id, result);
     Ok(Some(InterceptedResponse::Response(serde_json::to_vec(
         &response,
@@ -77,17 +69,6 @@ pub(crate) fn try_handle_screen_capture(
     _message: &serde_json::Value,
 ) -> anyhow::Result<Option<InterceptedResponse>> {
     Ok(None)
-}
-
-#[derive(Clone, Copy)]
-enum CaptureRequestKind {
-    LegacyToolCall,
-    McpToolsCall,
-}
-
-struct ScreenCaptureRequest {
-    kind: CaptureRequestKind,
-    options: Result<ScreenCaptureOptions, String>,
 }
 
 #[derive(Clone, Copy)]
@@ -104,35 +85,23 @@ struct ScreenCaptureArgs {
     scale: Option<f32>,
 }
 
-fn screen_capture_request(message: &serde_json::Value) -> Option<ScreenCaptureRequest> {
-    match message.get("method").and_then(serde_json::Value::as_str) {
-        Some("tools/call") => {
-            let params = message.get("params")?;
-            let name = params.get("name").and_then(serde_json::Value::as_str)?;
-            (name == "screen_capture").then(|| ScreenCaptureRequest {
-                kind: CaptureRequestKind::McpToolsCall,
-                options: parse_screen_capture_options(
-                    params
-                        .get("arguments")
-                        .cloned()
-                        .unwrap_or_else(|| serde_json::json!({})),
-                ),
-            })
-        }
-        _ => {
-            let params = message.get("params")?;
-            let tool = params.get("tool").and_then(serde_json::Value::as_str)?;
-            (tool == "screen_capture").then(|| ScreenCaptureRequest {
-                kind: CaptureRequestKind::LegacyToolCall,
-                options: parse_screen_capture_options(
-                    params
-                        .get("params")
-                        .cloned()
-                        .unwrap_or_else(|| serde_json::json!({})),
-                ),
-            })
-        }
+fn screen_capture_options(
+    message: &serde_json::Value,
+) -> Option<Result<ScreenCaptureOptions, String>> {
+    if message.get("method").and_then(serde_json::Value::as_str) != Some("tools/call") {
+        return None;
     }
+
+    let params = message.get("params")?;
+    let name = params.get("name").and_then(serde_json::Value::as_str)?;
+    (name == "screen_capture").then(|| {
+        parse_screen_capture_options(
+            params
+                .get("arguments")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({})),
+        )
+    })
 }
 
 fn parse_screen_capture_options(args: serde_json::Value) -> Result<ScreenCaptureOptions, String> {
