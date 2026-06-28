@@ -2,7 +2,7 @@ use apc_protocol::JsonRpcResponse;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-const VM_REBOOT_TOOL: &str = "vm_reboot";
+const REBOOT_TOOL: &str = "reboot";
 static REBOOT_SCHEDULED: AtomicBool = AtomicBool::new(false);
 
 pub(crate) enum HostInterceptResponse {
@@ -13,7 +13,7 @@ pub(crate) enum HostInterceptResponse {
 pub(crate) fn try_handle_host_request(
     message: &serde_json::Value,
 ) -> anyhow::Result<Option<HostInterceptResponse>> {
-    if tool_call_name(message) != Some(VM_REBOOT_TOOL) {
+    if tool_call_name(message) != Some(REBOOT_TOOL) {
         return Ok(None);
     }
 
@@ -71,9 +71,9 @@ pub(crate) fn augment_tools_list_response(
 
     let already_present = tools
         .iter()
-        .any(|tool| tool.get("name").and_then(serde_json::Value::as_str) == Some(VM_REBOOT_TOOL));
+        .any(|tool| tool.get("name").and_then(serde_json::Value::as_str) == Some(REBOOT_TOOL));
     if !already_present {
-        tools.push(vm_reboot_schema());
+        tools.push(reboot_schema());
     }
 
     Ok(serde_json::to_vec(&value)?)
@@ -93,9 +93,9 @@ fn tool_call_name(message: &serde_json::Value) -> Option<&str> {
         .and_then(serde_json::Value::as_str)
 }
 
-fn vm_reboot_schema() -> serde_json::Value {
+fn reboot_schema() -> serde_json::Value {
     serde_json::json!({
-        "name": VM_REBOOT_TOOL,
+        "name": REBOOT_TOOL,
         "description": "Reboot the APC microVM by restarting the host VM process.",
         "inputSchema": {
             "type": "object",
@@ -183,5 +183,5 @@ fn spawn_replacement_process(
     _exe: &std::path::Path,
     _args: &[std::ffi::OsString],
 ) -> anyhow::Result<()> {
-    anyhow::bail!("vm_reboot requires a Unix host")
+    anyhow::bail!("reboot requires a Unix host")
 }
