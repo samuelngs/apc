@@ -121,6 +121,13 @@ impl AppDelegate {
         if config.mcp_test {
             crate::mcp::run_mcp_test(&mcp_socket_path);
         }
+
+        if let Some(mcp_http) = config.mcp_http.clone() {
+            if let Err(e) = crate::mcp_http::start_server(mcp_socket_path.clone(), mcp_http) {
+                tracing::error!("failed to start MCP HTTP proxy: {e}");
+                std::process::exit(1);
+            }
+        }
     }
 
     fn create_viewer_window(&self, mtm: MainThreadMarker, config: &VmConfig) {

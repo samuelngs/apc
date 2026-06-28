@@ -173,6 +173,16 @@ pub(crate) fn handle_mcp_tool(
 }
 
 #[cfg(target_os = "linux")]
+pub(crate) fn handle_browser_tool(
+    state: &mut AgentCompositor,
+    name: String,
+    arguments: serde_json::Value,
+    reply_tx: mpsc::SyncSender<serde_json::Value>,
+) {
+    state.browser.handle_tool_async(name, arguments, reply_tx);
+}
+
+#[cfg(target_os = "linux")]
 fn handle_sync_tool(state: &mut AgentCompositor, tool: ToolCall) -> serde_json::Value {
     match tool {
         ToolCall::WindowList => {

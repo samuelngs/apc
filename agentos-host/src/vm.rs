@@ -16,6 +16,7 @@ pub struct VmConfig {
     pub allow_mount: Vec<String>,
     pub headless: bool,
     pub mcp_stdio: bool,
+    pub mcp_http: Option<crate::mcp_http::McpHttpConfig>,
 }
 
 #[cfg(target_os = "macos")]
